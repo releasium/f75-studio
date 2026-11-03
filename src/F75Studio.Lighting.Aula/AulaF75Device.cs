@@ -26,13 +26,17 @@ public sealed class AulaF75Device : IKeyboardDevice, ILiveLighting
     private IFeatureChannel? _liveChannel; // guarded by _gate
     private F75Session? _liveSession;      // guarded by _gate
     private volatile bool _isLive;
+    private readonly Func<long> _nowMs;
+    private long _lastOfficialCheck;       // guarded by _gate; _nowMs() of the last official-app check while live
+    private const int OfficialCheckIntervalMs = 1000;
 
     public AulaF75Device() : this(new HidSharpProbe(), 500)
     {
     }
 
-    internal AulaF75Device(IHidProbe probe, int transactionGapMs)
+    internal AulaF75Device(IHidProbe probe, int transactionGapMs, Func<long>? nowMs = null)
     {
+        _nowMs = nowMs ?? (() => Environment.TickCount64);
         _probe = probe;
         _transactionGapMs = transactionGapMs;
         _subscription = probe.SubscribeChanged(ScheduleRefresh);
@@ -146,6 +150,7 @@ public sealed class AulaF75Device : IKeyboardDevice, ILiveLighting
             _liveChannel = channel;
             _liveSession = session;
             _isLive = true;
+            _lastOfficialCheck = _nowMs(); // OpenKnownBoardAsync has just checked
         }
         finally
         {
@@ -160,6 +165,20 @@ public sealed class AulaF75Device : IKeyboardDevice, ILiveLighting
         {
             ThrowIfDisposed();
             if (_liveSession is null) throw new KeyboardUnavailableException("Screen sync isn't running.");
+
+            // The official app may be launched mid-stream; it fights over the same collection. Check at most once a second.
+            var now = _nowMs();
+            if (now - _lastOfficialCheck >= OfficialCheckIntervalMs)
+            {
+                _lastOfficialCheck = now;
+                if (_probe.OfficialAppRunning())
+                {
+                    EndLiveSession();
+                    ScheduleRefresh();
+                    throw new KeyboardUnavailableException(OfficialAppRunningText);
+                }
+            }
+
             try
             {
                 await _liveSession.SendLiveFrameAsync(F75Protocol.BuildLiveFrame(colors), ct).ConfigureAwait(false);

@@ -53,10 +53,16 @@ public sealed class ScreenSyncEngine : IScreenSync
             await _live.StartLiveAsync(ct).ConfigureAwait(false);
             Volatile.Write(ref _liveActive, 1);
 
-            IScreenCapture capture;
+            // No capture right now (secure desktop after unlock, UAC...) is not a start failure: begin paused and retry.
+            IScreenCapture? capture = null;
+            string? pausedReason = null;
             try
             {
                 capture = _captureFactory();
+            }
+            catch (ScreenCaptureException ex)
+            {
+                pausedReason = ex.Message;
             }
             catch
             {
@@ -67,7 +73,7 @@ public sealed class ScreenSyncEngine : IScreenSync
             var cts = new CancellationTokenSource();
             _cts = cts;
             _running = true;
-            _loop = Task.Run(() => RunAsync(capture, brightness, cts.Token));
+            _loop = Task.Run(() => RunAsync(capture, pausedReason, brightness, cts.Token));
         }
         finally
         {
@@ -108,7 +114,7 @@ public sealed class ScreenSyncEngine : IScreenSync
         }
     }
 
-    private async Task RunAsync(IScreenCapture? capture, Func<int> brightness, CancellationToken ct)
+    private async Task RunAsync(IScreenCapture? capture, string? startPausedReason, Func<int> brightness, CancellationToken ct)
     {
         IReadOnlyDictionary<int, Rgb>? lastTarget = null;
         Dictionary<int, double[]>? smoothed = null;
@@ -118,6 +124,13 @@ public sealed class ScreenSyncEngine : IScreenSync
 
         try
         {
+            if (startPausedReason is not null)
+            {
+                paused = true;
+                Raise(CaptureStatusChanged, "Screen capture paused: " + startPausedReason);
+                await _delay(_timing.CaptureRetryMs, ct).ConfigureAwait(false);
+            }
+
             while (!ct.IsCancellationRequested)
             {
                 var start = _nowMs();

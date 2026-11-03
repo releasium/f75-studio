@@ -256,6 +256,31 @@ public class ScreenSyncEngineTests
     }
 
     [Fact]
+    public async Task Capture_failure_at_start_begins_paused_then_resumes_and_sends()
+    {
+        var h = new Harness();
+        h.Captures.CreateFailure = new ScreenCaptureException("secure desktop");
+        var statuses = new List<string?>();
+        h.Engine.CaptureStatusChanged += s => { lock (statuses) statuses.Add(s); };
+
+        await h.Engine.StartAsync(() => 9);
+
+        Assert.True(h.Engine.IsRunning);
+        await WaitUntil(() => { lock (statuses) return statuses.Count >= 1; });
+        lock (statuses) Assert.Equal("Screen capture paused: secure desktop", statuses[0]);
+        Assert.Empty(h.Device.LiveFramesSnapshot());
+
+        h.Captures.Enqueue(Solid(Red));
+        h.Captures.CreateFailure = null;
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Count >= 1);
+        await h.Engine.StopAsync();
+
+        lock (statuses) Assert.Equal(new string?[] { "Screen capture paused: secure desktop", null }, statuses.Take(2));
+        Assert.Equal(1, h.Device.LiveStarts);
+        Assert.Equal(1, h.Device.LiveStops);
+    }
+
+    [Fact]
     public async Task Concurrent_start_and_stop_leave_a_consistent_state()
     {
         var h = new Harness();

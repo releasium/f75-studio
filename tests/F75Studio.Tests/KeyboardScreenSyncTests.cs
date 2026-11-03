@@ -139,6 +139,54 @@ public class KeyboardScreenSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task Suspend_stops_and_resume_restarts()
+    {
+        var vm = await RunningAsync();
+
+        vm.SetSuspended(true);
+        await SettleAsync(vm);
+        Assert.Equal(1, _sync.Stops);
+
+        vm.SetSuspended(false);
+        await SettleAsync(vm);
+        Assert.Equal(2, _sync.Starts);
+    }
+
+    [Fact]
+    public async Task Resume_does_not_restart_while_the_screen_is_still_locked()
+    {
+        var vm = await RunningAsync();
+
+        vm.SetScreenLocked(true);
+        vm.SetSuspended(true);
+        await SettleAsync(vm);
+        vm.SetSuspended(false);
+        await SettleAsync(vm);
+        Assert.Equal(1, _sync.Starts);
+
+        vm.SetScreenLocked(false);
+        await SettleAsync(vm);
+        Assert.Equal(2, _sync.Starts);
+    }
+
+    [Fact]
+    public async Task Unlock_does_not_restart_while_still_suspended()
+    {
+        var vm = await RunningAsync();
+
+        vm.SetSuspended(true);
+        vm.SetScreenLocked(true);
+        await SettleAsync(vm);
+        vm.SetScreenLocked(false);
+        await SettleAsync(vm);
+        Assert.Equal(1, _sync.Starts);
+
+        vm.SetSuspended(false);
+        await SettleAsync(vm);
+        Assert.Equal(2, _sync.Starts);
+    }
+
+    [Fact]
     public async Task Per_key_first_flag_writes_effect_21_before_streaming()
     {
         var vm = Create(perKeyFirst: true);

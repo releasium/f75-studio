@@ -158,6 +158,35 @@ public class AulaF75LiveTests
     }
 
     [Fact]
+    public async Task Official_app_launched_mid_stream_ends_the_session_within_a_second()
+    {
+        var board = new FakeTrackedBoard();
+        var probe = new FakeProbe { Boards = { board } };
+        long now = 10_000;
+        using var device = new AulaF75Device(probe, 0, () => Interlocked.Read(ref now));
+        Assert.True(SpinWait.SpinUntil(() => !device.IsRefreshing, 5000));
+        Assert.Equal(DeviceStatus.Connected, device.Status);
+        await device.StartLiveAsync();
+        var live = board.Last;
+        var colors = new Dictionary<int, Rgb> { [0] = Rgb.White };
+
+        await device.SendLiveAsync(colors);
+        probe.OfficialApp = true;
+        Interlocked.Add(ref now, 999);
+        await device.SendLiveAsync(colors); // rate limited: not checked yet
+        Assert.True(device.IsLive);
+
+        Interlocked.Add(ref now, 1);
+        var ex = await Assert.ThrowsAsync<KeyboardUnavailableException>(() => device.SendLiveAsync(colors));
+
+        Assert.Equal(AulaF75Device.OfficialAppRunningText, ex.Message);
+        Assert.False(device.IsLive);
+        Assert.True(live.Disposed);
+        Assert.True(SpinWait.SpinUntil(() => !device.IsRefreshing, 5000));
+        Assert.Equal(DeviceStatus.Error, device.Status);
+    }
+
+    [Fact]
     public async Task Live_channel_is_closed_by_dispose()
     {
         var device = CreateTracked(out var board, out _);

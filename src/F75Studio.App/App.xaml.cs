@@ -24,6 +24,7 @@ public partial class App : Application
     private AulaF75Device? _keyboardDevice;
     private KeyboardViewModel? _keyboard;
     private Microsoft.Win32.SessionSwitchEventHandler? _sessionSwitch;
+    private Microsoft.Win32.PowerModeChangedEventHandler? _powerMode;
     private bool _started;
     private bool _exiting;
     private bool _watchingSystemTheme;
@@ -81,6 +82,13 @@ public partial class App : Application
             else if (args.Reason == SessionSwitchReason.SessionUnlock) Ui.Run(() => _keyboard?.SetScreenLocked(false));
         };
         SystemEvents.SessionSwitch += _sessionSwitch;
+
+        _powerMode = (_, args) =>
+        {
+            if (args.Mode == Microsoft.Win32.PowerModes.Suspend) Ui.Run(() => _keyboard?.SetSuspended(true));
+            else if (args.Mode == Microsoft.Win32.PowerModes.Resume) Ui.Run(() => _keyboard?.SetSuspended(false));
+        };
+        SystemEvents.PowerModeChanged += _powerMode;
 
         if (!e.Args.Contains("--tray")) ShowMainWindow();
         HandleArguments(e.Args);
@@ -171,6 +179,11 @@ public partial class App : Application
         {
             SystemEvents.SessionSwitch -= _sessionSwitch; // static event: would otherwise keep this app alive
             _sessionSwitch = null;
+        }
+        if (_powerMode is not null)
+        {
+            SystemEvents.PowerModeChanged -= _powerMode;
+            _powerMode = null;
         }
         StopScreenSyncForExit();
         try { _keyboard?.FlushAsync().GetAwaiter().GetResult(); } catch { /* shutting down anyway */ }

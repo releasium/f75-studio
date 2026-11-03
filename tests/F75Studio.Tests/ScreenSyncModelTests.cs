@@ -92,6 +92,27 @@ public class ScreenSyncModelTests
         Assert.Equal(2, channel.Sent.Count);
         Assert.All(channel.Sent, f => Assert.Equal(0x08, f[1]));
         Assert.Equal(255, channel.Sent[0][8]);
-        Assert.Contains(7, delays);
+        Assert.DoesNotContain(delays, d => d > 7);
+    }
+
+    [Fact]
+    public async Task First_live_frame_needs_no_delay_but_a_back_to_back_one_waits()
+    {
+        var channel = new FakeFeatureChannel();
+        var delays = new List<int>();
+        long now = 1000;
+        var session = new F75Session(channel, (ms, _) => { delays.Add(ms); return Task.CompletedTask; }, () => now);
+        var payload = F75Protocol.BuildLiveFrame(new Dictionary<int, Rgb> { [0] = new(255, 0, 0) });
+
+        await session.SendLiveFrameAsync(payload, CancellationToken.None);
+        Assert.Empty(delays);
+
+        now += 3; // 3 ms later: only the remaining 4 ms are waited
+        await session.SendLiveFrameAsync(payload, CancellationToken.None);
+        Assert.Equal(new[] { 4 }, delays);
+
+        now += 20; // well past 7 ms: no delay
+        await session.SendLiveFrameAsync(payload, CancellationToken.None);
+        Assert.Equal(new[] { 4 }, delays);
     }
 }

@@ -20,8 +20,11 @@ public sealed class F75Session
     private readonly IFeatureChannel _channel;
     private readonly Func<int, CancellationToken, Task> _delay;
 
-    public F75Session(IFeatureChannel channel, Func<int, CancellationToken, Task>? delay = null)
+    private readonly Func<long>? _clockMs; // test hook; null = Stopwatch
+
+    public F75Session(IFeatureChannel channel, Func<int, CancellationToken, Task>? delay = null, Func<long>? clockMs = null)
     {
+        _clockMs = clockMs;
         _channel = channel;
         _delay = delay ?? ((ms, ct) => Task.Delay(ms, ct));
     }
@@ -81,8 +84,11 @@ public sealed class F75Session
     public async Task SendLiveFrameAsync(byte[] payload, CancellationToken ct)
     {
         var frame = F75Protocol.Frame(F75Protocol.CmdLive, 0, payload.Length, payload);
-        var since = (int)Stopwatch.GetElapsedTime(_lastLiveFrame).TotalMilliseconds;
-        await _delay(since >= 7 || _lastLiveFrame == 0 ? 7 : 7 - since, ct).ConfigureAwait(false);
+        if (_lastLiveFrame != 0)
+        {
+            var since = _clockMs is null ? (int)Stopwatch.GetElapsedTime(_lastLiveFrame).TotalMilliseconds : (int)(_clockMs() - _lastLiveFrame);
+            if (since < 7) await _delay(7 - since, ct).ConfigureAwait(false);
+        }
         try
         {
             _channel.SetFeature(frame);
@@ -92,7 +98,7 @@ public sealed class F75Session
             await _delay(7, ct).ConfigureAwait(false);
             _channel.SetFeature(frame);
         }
-        _lastLiveFrame = Stopwatch.GetTimestamp();
+        _lastLiveFrame = _clockMs?.Invoke() ?? Stopwatch.GetTimestamp();
     }
 
     private async Task<byte[]> ReadSettingsAsync(CancellationToken ct, string failureMessage)

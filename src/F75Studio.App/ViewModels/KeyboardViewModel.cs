@@ -39,6 +39,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private int _brightnessForLive = 9;
     private bool _screenRunning;
     private bool _locked;
+    private bool _suspended;
     private bool _faulted;
     private volatile bool _exiting;
     private bool _holdFaultStatus;
@@ -61,6 +62,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     [ObservableProperty] private string _profileNameEdit = "";
     [ObservableProperty] private bool _isScreenSyncRunning;
 
+    /// <param name="selectPerKeyBeforeLive">Not safe to enable yet: overwrites stored per-key colours and has no start-failure backoff — see Plan 3 final review I2.</param>
     public KeyboardViewModel(IKeyboardDevice device, JsonFileStore<LightingProfileSet> store, Func<CancellationToken, Task>? debounce = null,
         IScreenSync? screenSync = null, bool selectPerKeyBeforeLive = false)
     {
@@ -619,7 +621,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
         _exiting = true; // any in-flight start/update bails out
         if (_screenSync is null) return;
         // Not through the gate (a long start must not block exit); the engine's StopAsync is idempotent.
-        try { await _screenSync.StopAsync().WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); }
+        try { await Task.Run(() => _screenSync.StopAsync()).WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); }
         catch { /* shutting down anyway */ }
         _screenRunning = false;
     }
@@ -631,9 +633,16 @@ public sealed partial class KeyboardViewModel : ObservableObject
         UpdateScreenSync();
     }
 
+    /// <summary>System suspended: stop streaming (like a lock); resumed: start again if it should run and the screen isn't locked.</summary>
+    public void SetSuspended(bool suspended)
+    {
+        _suspended = suspended;
+        UpdateScreenSync();
+    }
+
     private bool ShouldRunScreenSync() =>
         _screenSync is not null && SelectedEffect.IsLive && DeviceStatus == DeviceStatus.Connected
-        && !_locked && !_faulted && !_exiting;
+        && !_locked && !_suspended && !_faulted && !_exiting;
 
     private void UpdateScreenSync() => PendingScreenSync = UpdateScreenSyncAsync();
 
@@ -662,7 +671,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
             {
                 await StopScreenSyncCoreAsync(_screenSync);
             }
-            else if (SelectedEffect.IsLive && !_locked && DeviceStatus != DeviceStatus.Connected)
+            else if (SelectedEffect.IsLive && !_locked && !_suspended && DeviceStatus != DeviceStatus.Connected)
             {
                 SetStatus("Screen sync needs the USB cable.", InfoBarSeverity.Informational);
             }
@@ -691,7 +700,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
                 wroteStored = true;
                 await Task.Run(() => _device.ApplyAsync(perKey, CancellationToken.None));
             }
-            await sync.StartAsync(() => Volatile.Read(ref _brightnessForLive));
+            await Task.Run(() => sync.StartAsync(() => Volatile.Read(ref _brightnessForLive)));
         }
         catch (Exception ex)
         {
@@ -702,7 +711,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
 
         if (_exiting)
         {
-            try { await sync.StopAsync(); } catch { /* shutting down anyway */ }
+            try { await Task.Run(() => sync.StopAsync()); } catch { /* shutting down anyway */ }
             return;
         }
         _screenRunning = true;
@@ -712,7 +721,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
 
     private async Task StopScreenSyncCoreAsync(IScreenSync sync)
     {
-        try { await sync.StopAsync(); }
+        try { await Task.Run(() => sync.StopAsync()); }
         catch { /* the engine cleans up after itself; carry on restoring */ }
         _screenRunning = false;
         IsScreenSyncRunning = false;
@@ -720,7 +729,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
         RefreshPreview();
         if (_exiting) return;
         if (DeviceStatus == DeviceStatus.Connected) ScheduleApply(force: true);
-        else if (SelectedEffect.IsLive && !_locked) SetStatus("Screen sync needs the USB cable.", InfoBarSeverity.Informational);
+        else if (SelectedEffect.IsLive && !_locked && !_suspended) SetStatus("Screen sync needs the USB cable.", InfoBarSeverity.Informational);
     }
 
     private void ShowRunningStatus()
