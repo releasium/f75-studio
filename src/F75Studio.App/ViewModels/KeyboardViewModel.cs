@@ -32,6 +32,18 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private bool _initializing;
     private bool _loadFailed;
 
+    private readonly IScreenSync? _screenSync;
+    private readonly bool _selectPerKeyBeforeLive;
+    private readonly SemaphoreSlim _syncGate = new(1, 1);
+    private int _baseEffectId = EffectIds.FixedOn;
+    private int _brightnessForLive = 9;
+    private bool _screenRunning;
+    private bool _locked;
+    private bool _faulted;
+    private bool _exiting;
+    private string? _capturePaused;
+    private long _lastPreviewMs = long.MinValue;
+
     [ObservableProperty] private EffectDefinition _selectedEffect = F75Effects.Get(EffectIds.FixedOn);
     [ObservableProperty] private int _brightness = 9;
     [ObservableProperty] private int _speed = 2;
@@ -46,14 +58,24 @@ public sealed partial class KeyboardViewModel : ObservableObject
     [ObservableProperty] private InfoBarSeverity _statusSeverity = InfoBarSeverity.Informational;
     [ObservableProperty] private string? _selectedProfile;
     [ObservableProperty] private string _profileNameEdit = "";
+    [ObservableProperty] private bool _isScreenSyncRunning;
 
-    public KeyboardViewModel(IKeyboardDevice device, JsonFileStore<LightingProfileSet> store, Func<CancellationToken, Task>? debounce = null)
+    public KeyboardViewModel(IKeyboardDevice device, JsonFileStore<LightingProfileSet> store, Func<CancellationToken, Task>? debounce = null,
+        IScreenSync? screenSync = null, bool selectPerKeyBeforeLive = false)
     {
         _device = device;
+        _screenSync = screenSync;
+        _selectPerKeyBeforeLive = selectPerKeyBeforeLive;
         _store = store;
         _debounce = debounce ?? (ct => Task.Delay(500, ct));
         Keys = F75Layout.Keys.Select(k => new KeyItemViewModel(k)).ToList();
         _initializing = true;
+        if (screenSync is not null)
+        {
+            screenSync.FrameSent += OnFrameSent;
+            screenSync.Faulted += reason => Ui.Run(() => OnScreenSyncFaulted(reason));
+            screenSync.CaptureStatusChanged += paused => Ui.Run(() => OnCaptureStatusChanged(paused));
+        }
         // Subscribe before reading the status so a change in between is not lost.
         device.StatusChanged += (_, _) => Ui.Run(OnDeviceStatusChanged);
         _deviceStatus = device.Status;
@@ -146,6 +168,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
         Color = Color,
         Colorful = Colorful,
         KeyColors = new Dictionary<int, Rgb>(_keyColors),
+        BaseEffectId = _baseEffectId,
     };
 
     public IReadOnlyList<string> ProfileNamesSnapshot() => ProfileNames.ToList();
@@ -273,6 +296,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
         Load(next.State);
         Save();
         ScheduleApply(force: true);
+        UpdateScreenSync();
     }
 
     /// <summary>Cancels the pending debounce and saves the current state now (call on exit). Starts no new device write.</summary>
@@ -295,10 +319,13 @@ public sealed partial class KeyboardViewModel : ObservableObject
         Save();
         // At startup, skip the forced apply while the keyboard is not on the cable (the Connected transition applies later).
         if (!_initializing || _device.Status == DeviceStatus.Connected) ScheduleApply(force: true);
+        UpdateScreenSync();
     }
 
     partial void OnSelectedEffectChanged(EffectDefinition value)
     {
+        if (!value.IsLive) _baseEffectId = value.Id;
+        _faulted = false; // choosing an effect (or loading a profile) allows screen sync to start again
         OnPropertyChanged(nameof(ShowSpeed));
         OnPropertyChanged(nameof(ShowBrightness));
         OnPropertyChanged(nameof(ShowColor));
@@ -306,7 +333,11 @@ public sealed partial class KeyboardViewModel : ObservableObject
         OnStateChanged();
     }
 
-    partial void OnBrightnessChanged(int value) => OnStateChanged();
+    partial void OnBrightnessChanged(int value)
+    {
+        Volatile.Write(ref _brightnessForLive, value);
+        OnStateChanged();
+    }
     partial void OnSpeedChanged(int value) => OnStateChanged();
     partial void OnColorfulChanged(bool value) => OnStateChanged();
 
@@ -368,7 +399,10 @@ public sealed partial class KeyboardViewModel : ObservableObject
         try
         {
             var s = state.Normalize();
-            SelectedEffect = F75Effects.IsSupported(s.EffectId) ? F75Effects.Get(s.EffectId) : F75Effects.Get(EffectIds.FixedOn);
+            var effect = F75Effects.IsSupported(s.EffectId) ? F75Effects.Get(s.EffectId) : F75Effects.Get(EffectIds.FixedOn);
+            var savedBase = F75Effects.IsSupported(s.BaseEffectId) && !F75Effects.Get(s.BaseEffectId).IsLive ? s.BaseEffectId : EffectIds.FixedOn;
+            _baseEffectId = effect.IsLive ? savedBase : effect.Id;
+            SelectedEffect = effect;
             Brightness = s.Brightness;
             Speed = s.Speed;
             Color = s.Color;
@@ -429,7 +463,9 @@ public sealed partial class KeyboardViewModel : ObservableObject
         RefreshPreview();
         var index = _profiles.FindIndex(p => p.Name == _activeProfileName);
         if (index >= 0) _profiles[index] = _profiles[index] with { State = CurrentState };
-        ScheduleApply();
+        // When leaving screen sync, the stop path schedules the (forced) restore itself: don't write twice.
+        if (!(_screenRunning && !ShouldRunScreenSync())) ScheduleApply();
+        UpdateScreenSync();
     }
 
     private void Save()
@@ -470,13 +506,16 @@ public sealed partial class KeyboardViewModel : ObservableObject
             await _debounce(ct);
             if (ct.IsCancellationRequested) return;
             Save();
-            if (!_forcePending && _lastApplied is { } last && WireEqual(last, state)) return;
+            // While a live effect is selected the keyboard only gets stored writes when forced (never on brightness drags).
+            if (!_forcePending && state.EffectId == EffectIds.ScreenSync) return;
+            var stored = state.StoredState();
+            if (!_forcePending && _lastApplied is { } last && WireEqual(last, stored)) return;
             _forcePending = false;
             mine = ++_deviceSeq;
             _lastApplied = null; // unknown until the write finishes, so a revert during the write is not skipped
             // HID I/O (even HidSharp's synchronous parts) runs on the pool; this method resumes on the UI context.
-            await Task.Run(() => _device.ApplyAsync(state, CancellationToken.None));
-            if (mine == _deviceSeq) _lastApplied = state;
+            await Task.Run(() => _device.ApplyAsync(stored, CancellationToken.None));
+            if (mine == _deviceSeq) _lastApplied = stored;
             if (_lastSaveError is { } saveError) Report(saveError, InfoBarSeverity.Error);
             else Report("Applied to keyboard.", InfoBarSeverity.Success);
         }
@@ -503,14 +542,22 @@ public sealed partial class KeyboardViewModel : ObservableObject
 
     private void OnDeviceStatusChanged()
     {
+        var was = DeviceStatus;
         DeviceStatus = _device.Status;
         DeviceStatusText = _device.StatusText;
-        if (DeviceStatus == DeviceStatus.Connected) ScheduleApply(force: true);
+        if (DeviceStatus == DeviceStatus.Connected)
+        {
+            if (was != DeviceStatus.Connected) _faulted = false;
+            // A repeated Connected notification must not write settings in the middle of a live stream.
+            if (!(_screenRunning && was == DeviceStatus.Connected)) ScheduleApply(force: true);
+        }
+        UpdateScreenSync();
     }
 
     private void RefreshPreview()
     {
-        var effect = SelectedEffect;
+        if (SelectedEffect.IsLive && _screenRunning) return; // frames drive the preview
+        var effect = SelectedEffect.IsLive ? F75Effects.Get(_baseEffectId) : SelectedEffect;
         foreach (var key in Keys)
         {
             key.Color = effect.Id switch
@@ -521,6 +568,166 @@ public sealed partial class KeyboardViewModel : ObservableObject
                 _ => Color.WithBrightness(Brightness),
             };
         }
+    }
+
+    // ---- Screen sync -------------------------------------------------------------------------------------------
+
+    /// <summary>Completes when the most recent screen-sync start/stop decision has been carried out (tests await it).</summary>
+    public Task PendingScreenSync { get; private set; } = Task.CompletedTask;
+
+    /// <summary>Stops the engine without restoring the stored effect (used on exit).</summary>
+    public async Task StopScreenSyncAsync()
+    {
+        _exiting = true;
+        if (_screenSync is null) return;
+        await _syncGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_screenRunning)
+            {
+                try { await _screenSync.StopAsync().ConfigureAwait(false); }
+                catch { /* shutting down anyway */ }
+                _screenRunning = false;
+            }
+        }
+        finally
+        {
+            _syncGate.Release();
+        }
+    }
+
+    /// <summary>Screen locked: stop streaming (and restore the stored effect); unlocked: start again if it should run.</summary>
+    public void SetScreenLocked(bool locked)
+    {
+        _locked = locked;
+        UpdateScreenSync();
+    }
+
+    private bool ShouldRunScreenSync() =>
+        _screenSync is not null && SelectedEffect.IsLive && DeviceStatus == DeviceStatus.Connected
+        && !_locked && !_faulted && !_exiting;
+
+    private void UpdateScreenSync() => PendingScreenSync = UpdateScreenSyncAsync();
+
+    private async Task UpdateScreenSyncAsync()
+    {
+        if (_screenSync is null) return;
+        await _syncGate.WaitAsync();
+        try
+        {
+            if (ShouldRunScreenSync())
+            {
+                if (!_screenRunning) await StartScreenSyncAsync(_screenSync);
+            }
+            else if (_screenRunning)
+            {
+                await StopScreenSyncCoreAsync(_screenSync);
+            }
+            else if (SelectedEffect.IsLive && !_locked && DeviceStatus != DeviceStatus.Connected)
+            {
+                SetStatus("Screen sync needs the USB cable.", InfoBarSeverity.Informational);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Screen sync error: {ex.Message}", InfoBarSeverity.Warning);
+        }
+        finally
+        {
+            _syncGate.Release();
+        }
+    }
+
+    private async Task StartScreenSyncAsync(IScreenSync sync)
+    {
+        _capturePaused = null;
+        Interlocked.Exchange(ref _lastPreviewMs, long.MinValue);
+        // Let any queued stored write (profile switch, Connected) finish before the live stream begins.
+        Task pending;
+        do
+        {
+            pending = PendingApply;
+            await pending;
+        } while (!ReferenceEquals(pending, PendingApply));
+        if (!ShouldRunScreenSync()) return; // state changed while waiting; the newer update decides
+
+        var wroteStored = false;
+        try
+        {
+            if (_selectPerKeyBeforeLive)
+            {
+                var perKey = CurrentState.StoredState() with { EffectId = EffectIds.PerKey, KeyColors = new Dictionary<int, Rgb>() };
+                _lastApplied = null;
+                wroteStored = true;
+                await Task.Run(() => _device.ApplyAsync(perKey, CancellationToken.None));
+            }
+            await sync.StartAsync(() => Volatile.Read(ref _brightnessForLive));
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Screen sync couldn't start: {ex.Message}", InfoBarSeverity.Warning);
+            if (wroteStored && DeviceStatus == DeviceStatus.Connected) ScheduleApply(force: true);
+            return;
+        }
+
+        if (_exiting)
+        {
+            try { await sync.StopAsync(); } catch { /* shutting down anyway */ }
+            return;
+        }
+        _screenRunning = true;
+        IsScreenSyncRunning = true;
+        ShowRunningStatus();
+    }
+
+    private async Task StopScreenSyncCoreAsync(IScreenSync sync)
+    {
+        try { await sync.StopAsync(); }
+        catch { /* the engine cleans up after itself; carry on restoring */ }
+        _screenRunning = false;
+        IsScreenSyncRunning = false;
+        _capturePaused = null;
+        RefreshPreview();
+        if (_exiting) return;
+        if (DeviceStatus == DeviceStatus.Connected) ScheduleApply(force: true);
+        else if (SelectedEffect.IsLive && !_locked) SetStatus("Screen sync needs the USB cable.", InfoBarSeverity.Informational);
+    }
+
+    private void ShowRunningStatus()
+    {
+        if (_capturePaused is { } text) SetStatus(text, InfoBarSeverity.Warning);
+        else SetStatus("Screen sync is running.", InfoBarSeverity.Success);
+    }
+
+    private void OnCaptureStatusChanged(string? paused)
+    {
+        _capturePaused = paused;
+        if (_screenRunning) ShowRunningStatus();
+    }
+
+    private void OnScreenSyncFaulted(string reason)
+    {
+        if (_exiting) return;
+        _faulted = true; // no automatic restart until the next Connected transition or effect selection
+        _screenRunning = false;
+        IsScreenSyncRunning = false;
+        _capturePaused = null;
+        RefreshPreview();
+        SetStatus($"Screen sync stopped: {reason}", InfoBarSeverity.Warning);
+    }
+
+    /// <summary>Engine thread: throttles to one preview update per 100 ms.</summary>
+    private void OnFrameSent(IReadOnlyDictionary<int, Rgb> frame)
+    {
+        var now = Environment.TickCount64;
+        var last = Interlocked.Read(ref _lastPreviewMs);
+        if (last != long.MinValue && now - last < 100) return;
+        Interlocked.Exchange(ref _lastPreviewMs, now);
+        Ui.Run(() =>
+        {
+            if (!_screenRunning) return;
+            foreach (var key in Keys) key.Color = frame.TryGetValue(key.Led, out var c) ? c : Rgb.Black;
+        });
     }
 
     private void SetStatus(string message, InfoBarSeverity severity) => Ui.Run(() =>

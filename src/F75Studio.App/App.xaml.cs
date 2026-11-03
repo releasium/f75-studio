@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Threading;
+using Microsoft.Win32;
 using F75Studio.App.Services;
 using F75Studio.App.ViewModels;
 using F75Studio.Core;
@@ -22,6 +23,7 @@ public partial class App : Application
     private ScriptsViewModel? _scripts;
     private AulaF75Device? _keyboardDevice;
     private KeyboardViewModel? _keyboard;
+    private Microsoft.Win32.SessionSwitchEventHandler? _sessionSwitch;
     private bool _started;
     private bool _exiting;
     private bool _watchingSystemTheme;
@@ -35,6 +37,7 @@ public partial class App : Application
         {
             // Logoff/shutdown: no prompt. Keep un-applied cards so they load again next time.
             _hotkeys?.SaveDrafts();
+            StopScreenSyncForExit();
             try { _keyboard?.FlushAsync().GetAwaiter().GetResult(); } catch { /* shutting down anyway */ }
             ExitApp();
         };
@@ -72,6 +75,13 @@ public partial class App : Application
         _instance!.ArgumentsReceived += (_, args) => Ui.Run(() => HandleArguments(args));
         _services.StartAutoRunScripts();
 
+        _sessionSwitch = (_, args) =>
+        {
+            if (args.Reason == SessionSwitchReason.SessionLock) Ui.Run(() => _keyboard?.SetScreenLocked(true));
+            else if (args.Reason == SessionSwitchReason.SessionUnlock) Ui.Run(() => _keyboard?.SetScreenLocked(false));
+        };
+        SystemEvents.SessionSwitch += _sessionSwitch;
+
         if (!e.Args.Contains("--tray")) ShowMainWindow();
         HandleArguments(e.Args);
     }
@@ -92,7 +102,8 @@ public partial class App : Application
         _scripts = scripts;
         _keyboardDevice = new AulaF75Device();
         var lightingStore = new JsonFileStore<LightingProfileSet>(services.Paths.ProfilesFile, () => new LightingProfileSet());
-        var keyboard = new KeyboardViewModel(_keyboardDevice, lightingStore);
+        var screenSync = new ScreenSyncEngine(() => new DxgiScreenCapture(), _keyboardDevice!);
+        var keyboard = new KeyboardViewModel(_keyboardDevice, lightingStore, screenSync: screenSync);
         _keyboard = keyboard;
         var settings = new SettingsViewModel(services, new RegistryStartupRegistration(AppExecutable.Path));
         NavItem[] pages =
@@ -139,12 +150,29 @@ public partial class App : Application
         ExitApp();
     }
 
+    /// <summary>Stops live streaming (no restore) before the settings are flushed and the device is disposed; waits up to 1 s.</summary>
+    private void StopScreenSyncForExit()
+    {
+        try
+        {
+            var keyboard = _keyboard;
+            if (keyboard is not null) Task.Run(keyboard.StopScreenSyncAsync).Wait(TimeSpan.FromSeconds(1));
+        }
+        catch { /* shutting down anyway */ }
+    }
+
     private void ExitApp()
     {
         if (_exiting) return;
         _exiting = true;
         // Cancel any recording first so it cannot restart the generated script after StopAll.
         try { _hotkeys?.CancelRecording(resume: false); } catch { /* shutting down anyway */ }
+        if (_sessionSwitch is not null)
+        {
+            SystemEvents.SessionSwitch -= _sessionSwitch; // static event: would otherwise keep this app alive
+            _sessionSwitch = null;
+        }
+        StopScreenSyncForExit();
         try { _keyboard?.FlushAsync().GetAwaiter().GetResult(); } catch { /* shutting down anyway */ }
         try { _services?.Runner.StopAll(); }
         catch (Exception ex) { _services?.Log.Write(ex, "Stopping scripts on exit"); }
