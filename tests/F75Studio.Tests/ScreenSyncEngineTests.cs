@@ -78,6 +78,40 @@ public class ScreenSyncEngineTests
     }
 
     [Fact]
+    public async Task A_custom_mapper_replaces_the_edge_mapper()
+    {
+        var h = new Harness();
+        h.Captures.Enqueue(Solid(Red));
+        var green = new Rgb(0, 255, 0);
+        await h.Engine.StartAsync(() => 9, _ => F75Layout.Keys.ToDictionary(k => k.Led, _ => green));
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Count >= 1);
+        await h.Engine.StopAsync();
+
+        Assert.All(h.Device.LiveFramesSnapshot()[0].Values, c => Assert.Equal(green, c));
+    }
+
+    [Fact]
+    public async Task The_mapper_is_consulted_every_frame_so_it_can_switch_without_a_restart()
+    {
+        var h = new Harness();
+        var green = new Rgb(0, 255, 0);
+        var useBlue = 0;
+        IReadOnlyDictionary<int, Rgb> Map(CapturedFrame _) =>
+            F75Layout.Keys.ToDictionary(k => k.Led, _ => Volatile.Read(ref useBlue) == 1 ? Blue : green);
+        h.Captures.Enqueue(Solid(Red));
+        await h.Engine.StartAsync(() => 9, Map);
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Count >= 1);
+        Assert.Equal(green, h.Device.LiveFramesSnapshot()[0][EscLed]);
+
+        Volatile.Write(ref useBlue, 1);
+        for (var i = 0; i < 40; i++) h.Captures.Enqueue(Solid(Red));
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Any(f => f[EscLed].B > 200));
+        await h.Engine.StopAsync();
+
+        Assert.Equal(1, h.Device.LiveStarts);
+    }
+
+    [Fact]
     public async Task Smoothing_moves_35_percent_per_frame()
     {
         var h = new Harness();

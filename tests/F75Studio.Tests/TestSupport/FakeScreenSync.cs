@@ -19,15 +19,19 @@ public sealed class FakeScreenSync : IScreenSync
     /// <summary>The brightness callback passed to the latest StartAsync.</summary>
     public Func<int>? Brightness { get; private set; }
 
+    /// <summary>The mapper passed to the latest StartAsync (null = default edge mapper).</summary>
+    public Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>>? LastMapper { get; private set; }
+
     public event Action<IReadOnlyDictionary<int, Rgb>>? FrameSent;
     public event Action<string>? Faulted;
     public event Action<string?>? CaptureStatusChanged;
 
-    public Task StartAsync(Func<int> brightness, CancellationToken ct = default)
+    public Task StartAsync(Func<int> brightness, Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>>? mapper = null, CancellationToken ct = default)
     {
         OnStart?.Invoke();
         if (StartFailWith is { } failure) return Task.FromException(failure);
         Brightness = brightness;
+        LastMapper = mapper;
         IsRunning = true;
         Interlocked.Increment(ref _starts);
         return Task.CompletedTask;

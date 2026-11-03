@@ -8,6 +8,9 @@ public static class EffectIds
 
     /// <summary>App-side live effect; never written to the keyboard's settings page.</summary>
     public const int ScreenSync = 100;
+
+    /// <summary>App-side live effect (blurred image); never written to the keyboard.</summary>
+    public const int ScreenSyncBlur = 101;
 }
 
 /// <param name="Id">Value written to settings byte 0x0a (protocol doc §5).</param>
@@ -38,6 +41,7 @@ public static class F75Effects
         new(17, "Blossoming", true, true, false),
         new(EffectIds.PerKey, "Custom per-key", HasSpeed: false, HasBrightness: true, HasColor: false),
         new(EffectIds.ScreenSync, "Screen sync (edges)", HasSpeed: false, HasBrightness: true, HasColor: false, IsLive: true),
+        new(EffectIds.ScreenSyncBlur, "Screen sync (blur)", HasSpeed: false, HasBrightness: true, HasColor: false, IsLive: true),
     ];
 
     public static bool IsSupported(int id) => All.Any(e => e.Id == id);

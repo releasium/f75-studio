@@ -14,8 +14,26 @@ public class ScreenSyncModelTests
         Assert.True(def.HasBrightness);
         Assert.False(def.HasSpeed);
         Assert.False(def.HasColor);
-        Assert.Equal(EffectIds.ScreenSync, F75Effects.All[^1].Id);
-        Assert.All(F75Effects.All.Where(e => e.Id != EffectIds.ScreenSync), e => Assert.False(e.IsLive));
+        Assert.Equal(EffectIds.ScreenSyncBlur, F75Effects.All[^1].Id);
+        Assert.All(F75Effects.All.Where(e => e.Id != EffectIds.ScreenSync && e.Id != EffectIds.ScreenSyncBlur), e => Assert.False(e.IsLive));
+    }
+
+    [Fact]
+    public void Screen_sync_blur_is_a_live_app_side_effect()
+    {
+        var def = F75Effects.Get(EffectIds.ScreenSyncBlur);
+        Assert.Equal(101, def.Id);
+        Assert.Equal("Screen sync (blur)", def.Name);
+        Assert.True(def.IsLive);
+        Assert.True(def.HasBrightness);
+        Assert.False(def.HasSpeed);
+        Assert.False(def.HasColor);
+
+        var live = new LightingState { EffectId = EffectIds.ScreenSyncBlur, BaseEffectId = 2, Brightness = 4 };
+        Assert.Equal(2, live.StoredState().EffectId);
+        Assert.Equal(4, live.StoredState().Brightness);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            F75Protocol.PatchSettings(F75ProtocolTests.FixedOnPage(), new LightingState { EffectId = EffectIds.ScreenSyncBlur }));
     }
 
     [Fact]

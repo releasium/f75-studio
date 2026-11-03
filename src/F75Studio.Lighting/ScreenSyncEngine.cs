@@ -40,7 +40,7 @@ public sealed class ScreenSyncEngine : IScreenSync
     public event Action<string>? Faulted;
     public event Action<string?>? CaptureStatusChanged;
 
-    public async Task StartAsync(Func<int> brightness, CancellationToken ct = default)
+    public async Task StartAsync(Func<int> brightness, Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>>? mapper = null, CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -73,7 +73,7 @@ public sealed class ScreenSyncEngine : IScreenSync
             var cts = new CancellationTokenSource();
             _cts = cts;
             _running = true;
-            _loop = Task.Run(() => RunAsync(capture, pausedReason, brightness, cts.Token));
+            _loop = Task.Run(() => RunAsync(capture, pausedReason, brightness, mapper ?? EdgeMapper.Map, cts.Token));
         }
         finally
         {
@@ -114,7 +114,8 @@ public sealed class ScreenSyncEngine : IScreenSync
         }
     }
 
-    private async Task RunAsync(IScreenCapture? capture, string? startPausedReason, Func<int> brightness, CancellationToken ct)
+    private async Task RunAsync(IScreenCapture? capture, string? startPausedReason, Func<int> brightness,
+        Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>> mapper, CancellationToken ct)
     {
         IReadOnlyDictionary<int, Rgb>? lastTarget = null;
         Dictionary<int, double[]>? smoothed = null;
@@ -149,7 +150,7 @@ public sealed class ScreenSyncEngine : IScreenSync
                     var frame = capture.TryCapture(_timing.FramePeriodMs);
                     if (frame is not null)
                     {
-                        target = EdgeMapper.Map(frame);
+                        target = mapper(frame);
                         lastTarget = target;
                         if (paused)
                         {
