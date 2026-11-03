@@ -40,5 +40,12 @@ public readonly record struct Rgb(byte R, byte G, byte B)
         return new Rgb(ToByte(r + m), ToByte(g + m), ToByte(b + m));
     }
 
+    /// <summary>Scales the colour for an on-screen brightness preview (0–9).</summary>
+    public Rgb WithBrightness(int brightness)
+    {
+        var f = 0.25 + 0.75 * Math.Clamp(brightness, 0, 9) / 9.0;
+        return new Rgb((byte)Math.Round(R * f), (byte)Math.Round(G * f), (byte)Math.Round(B * f));
+    }
+
     private static byte ToByte(double v) => (byte)Math.Round(Math.Clamp(v, 0, 1) * 255);
 }
