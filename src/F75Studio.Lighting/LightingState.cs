@@ -21,6 +21,17 @@ public sealed record LightingState
     /// <summary>LED index → colour, used by the per-key effect. Missing LEDs are off.</summary>
     public IReadOnlyDictionary<int, Rgb> KeyColors { get; init; } = new Dictionary<int, Rgb>();
 
+    /// <summary>Stored effect the keyboard shows while a live effect isn't streaming.</summary>
+    public int BaseEffectId { get; init; } = EffectIds.FixedOn;
+
+    /// <summary>The state to write to the keyboard's settings: live effects fall back to <see cref="BaseEffectId"/>.</summary>
+    public LightingState StoredState()
+    {
+        if (!F75Effects.IsSupported(EffectId) || !F75Effects.Get(EffectId).IsLive) return this;
+        var baseId = F75Effects.IsSupported(BaseEffectId) && !F75Effects.Get(BaseEffectId).IsLive ? BaseEffectId : EffectIds.FixedOn;
+        return this with { EffectId = baseId };
+    }
+
     public LightingState Normalize() => this with
     {
         Brightness = Math.Clamp(Brightness, 0, 9),

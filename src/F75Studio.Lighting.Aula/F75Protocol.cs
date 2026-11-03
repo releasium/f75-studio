@@ -19,6 +19,7 @@ public static class F75Protocol
     public const byte CmdSettings = 0x04;
     public const byte CmdColorTable = 0x0A;
     public const byte CmdPerKey = 0x06;
+    public const byte CmdLive = 0x08;
     public const byte ReadFlag = 0x80;
 
     // (command, param, length) — everything else is refused (protocol doc §10).
@@ -28,6 +29,7 @@ public static class F75Protocol
         (0x84, 0, SettingsLength), (0x04, 0, SettingsLength),
         (0x8A, 0, ColorTableLength), (0x0A, 0, ColorTableLength),
         (0x86, 0, PerKeyLength), (0x06, 0, PerKeyLength),
+        (0x08, 0, PerKeyLength),
     ];
 
     private static readonly byte[][] KnownIdentities =
@@ -107,6 +109,7 @@ public static class F75Protocol
         if (page.Length != SettingsLength || !HasMarker(page, SettingsMarkerOffset))
             throw new F75ProtocolException("The keyboard's settings page is missing its 5A A5 marker.");
         var definition = F75Effects.Get(state.EffectId);
+        if (definition.IsLive) throw new ArgumentOutOfRangeException(nameof(state), state.EffectId, "Live effects are not stored on the keyboard.");
         var s = state.Normalize();
         var p = page.ToArray();
 
@@ -155,6 +158,20 @@ public static class F75Protocol
             data[led] = color.R;
             data[PlaneSize + led] = color.G;
             data[2 * PlaneSize + led] = color.B;
+        }
+        return data;
+    }
+
+    /// <summary>378 bytes, interleaved R,G,B at led*3 (protocol doc §8). Volatile: nothing is stored.</summary>
+    public static byte[] BuildLiveFrame(IReadOnlyDictionary<int, Rgb> colors)
+    {
+        var data = new byte[PerKeyLength];
+        foreach (var (led, color) in colors)
+        {
+            if (!RealLeds.Contains(led)) continue;
+            data[led * 3] = color.R;
+            data[led * 3 + 1] = color.G;
+            data[led * 3 + 2] = color.B;
         }
         return data;
     }

@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace F75Studio.Lighting.Aula;
 
 /// <summary>A HID feature-report endpoint (report 0x06, 520-byte buffers).</summary>
@@ -30,6 +32,7 @@ public sealed class F75Session
     {
         var s = state.Normalize();
         var definition = F75Effects.Get(s.EffectId);
+        if (definition.IsLive) throw new ArgumentOutOfRangeException(nameof(state), state.EffectId, "Live effects are streamed, not stored.");
         var settingsWait = 60;
         var wroteFirst = false;
 
@@ -70,6 +73,26 @@ public sealed class F75Session
         if (patchedPage.AsSpan().SequenceEqual(page)) return; // already what the keyboard holds: skip the flash write
         await _delay(settingsWait, ct).ConfigureAwait(false);
         await WriteAsync(F75Protocol.CmdSettings, patchedPage, ct).ConfigureAwait(false);
+    }
+
+    private long _lastLiveFrame;
+
+    /// <summary>Sends one volatile live frame (protocol doc §8). At least 7 ms between frames; one retry on a transfer error.</summary>
+    public async Task SendLiveFrameAsync(byte[] payload, CancellationToken ct)
+    {
+        var frame = F75Protocol.Frame(F75Protocol.CmdLive, 0, payload.Length, payload);
+        var since = (int)Stopwatch.GetElapsedTime(_lastLiveFrame).TotalMilliseconds;
+        await _delay(since >= 7 || _lastLiveFrame == 0 ? 7 : 7 - since, ct).ConfigureAwait(false);
+        try
+        {
+            _channel.SetFeature(frame);
+        }
+        catch (IOException)
+        {
+            await _delay(7, ct).ConfigureAwait(false);
+            _channel.SetFeature(frame);
+        }
+        _lastLiveFrame = Stopwatch.GetTimestamp();
     }
 
     private async Task<byte[]> ReadSettingsAsync(CancellationToken ct, string failureMessage)

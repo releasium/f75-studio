@@ -5,11 +5,15 @@ public static class EffectIds
     public const int Off = 0;
     public const int FixedOn = 1;
     public const int PerKey = 21;
+
+    /// <summary>App-side live effect; never written to the keyboard's settings page.</summary>
+    public const int ScreenSync = 100;
 }
 
 /// <param name="Id">Value written to settings byte 0x0a (protocol doc §5).</param>
 /// <param name="HasColor">Effect supports a single colour or "colourful" (random) mode.</param>
-public sealed record EffectDefinition(int Id, string Name, bool HasSpeed, bool HasBrightness, bool HasColor);
+/// <param name="IsLive">Streamed with volatile live frames; not a keyboard effect.</param>
+public sealed record EffectDefinition(int Id, string Name, bool HasSpeed, bool HasBrightness, bool HasColor, bool IsLive = false);
 
 public static class F75Effects
 {
@@ -33,6 +37,7 @@ public static class F75Effects
         new(16, "Colorful waterfall", true, true, false),
         new(17, "Blossoming", true, true, false),
         new(EffectIds.PerKey, "Custom per-key", HasSpeed: false, HasBrightness: true, HasColor: false),
+        new(EffectIds.ScreenSync, "Screen sync (edges)", HasSpeed: false, HasBrightness: true, HasColor: false, IsLive: true),
     ];
 
     public static bool IsSupported(int id) => All.Any(e => e.Id == id);
