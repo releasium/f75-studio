@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
+    <!-- NU1701: H.NotifyIcon.Wpf 2.4.1 only ships a net462 asset for net8 (transitive via the App project). -->
     <NoWarn>$(NoWarn);NU1701</NoWarn>
 
     <IsPackable>false</IsPackable>

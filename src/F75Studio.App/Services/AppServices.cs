@@ -17,7 +17,7 @@ public sealed class AppServices
         HotkeyStore = new JsonFileStore<List<Hotkey>>(paths.HotkeysFile, () => []);
         Log = new FileLog(paths.LogsFolder);
         Runner = runner ?? new AhkRunner(AhkLocator.Find(Settings.AhkPath));
-        Generator = new AhkGenerator(Environment.ProcessPath ?? "F75Studio.exe");
+        Generator = new AhkGenerator(AppExecutable.Path);
     }
 
     public AppPaths Paths { get; }

@@ -18,7 +18,7 @@ public sealed class TrayService : IDisposable
         _icon = new TaskbarIcon
         {
             ToolTipText = "F75 Studio",
-            Icon = System.Drawing.Icon.ExtractAssociatedIcon(Environment.ProcessPath!),
+            Icon = System.Drawing.Icon.ExtractAssociatedIcon(AppExecutable.Path),
             ContextMenu = menu,
             NoLeftClickDelay = true,
             LeftClickCommand = new RelayCommand(show),

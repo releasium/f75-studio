@@ -16,10 +16,16 @@ public partial class App : Application
     private AppServices? _services;
     private TrayService? _tray;
     private MainWindow? _window;
+    private bool _started;
+    private bool _exiting;
+    private bool _watchingSystemTheme;
+    private AppTheme? _appliedTheme;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        DispatcherUnhandledException += OnUnhandledException;
+        SessionEnding += (_, _) => ExitApp();
 
         _instance = new SingleInstance(InstanceName);
         if (!_instance.IsFirstInstance)
@@ -30,18 +36,28 @@ public partial class App : Application
             return;
         }
 
+        try
+        {
+            StartUp(e);
+            _started = true;
+        }
+        catch (Exception ex)
+        {
+            FailStartup(ex);
+        }
+    }
+
+    private void StartUp(StartupEventArgs e)
+    {
         _services = new AppServices(AppPaths.Default());
-        DispatcherUnhandledException += OnUnhandledException;
         TaskScheduler.UnobservedTaskException += (_, args) => _services.Log.Write(args.Exception, "Unobserved task exception");
 
+        _window = new MainWindow { DataContext = CreateMainViewModel(_services) };
         ApplyTheme(_services.Settings.Theme);
         _services.SettingsChanged += (_, settings) => ApplyTheme(settings.Theme);
 
-        _window = new MainWindow { DataContext = CreateMainViewModel(_services) };
-        if (_services.Settings.Theme == AppTheme.System) SystemThemeWatcher.Watch(_window);
-
         _tray = new TrayService(_services, ShowMainWindow, ExitApp);
-        _instance.ArgumentsReceived += (_, args) => Dispatcher.Invoke(() => HandleArguments(args));
+        _instance!.ArgumentsReceived += (_, args) => Ui.Run(() => HandleArguments(args));
         _services.StartAutoRunScripts();
 
         if (!e.Args.Contains("--tray")) ShowMainWindow();
@@ -50,7 +66,7 @@ public partial class App : Application
     /// <summary>Builds the left navigation pages, in order. Tasks 10 and 11 replace this method.</summary>
     private static MainViewModel CreateMainViewModel(AppServices services)
     {
-        var settings = new SettingsViewModel(services, new RegistryStartupRegistration(Environment.ProcessPath!));
+        var settings = new SettingsViewModel(services, new RegistryStartupRegistration(AppExecutable.Path));
         return new MainViewModel([new NavItem("Settings", SymbolRegular.Settings24, settings)]);
     }
 
@@ -70,31 +86,70 @@ public partial class App : Application
 
     private void ExitApp()
     {
-        _services?.Runner.StopAll();
-        _tray?.Dispose();
-        _instance?.Dispose();
-        if (_window is not null)
+        if (_exiting) return;
+        _exiting = true;
+        try { _services?.Runner.StopAll(); }
+        catch (Exception ex) { _services?.Log.Write(ex, "Stopping scripts on exit"); }
+        finally
         {
-            _window.AllowClose = true;
-            _window.Close();
+            try { _tray?.Dispose(); } catch { /* shutting down anyway */ }
+            try { _instance?.Dispose(); } catch { /* shutting down anyway */ }
+            if (_window is not null)
+            {
+                _window.AllowClose = true;
+                try { _window.Close(); } catch { /* shutting down anyway */ }
+            }
+            Shutdown();
         }
-        Shutdown();
     }
 
-    private static void ApplyTheme(AppTheme theme)
+    /// <summary>Applies the theme; owns the system-theme watcher (attached only while the theme is System).</summary>
+    private void ApplyTheme(AppTheme theme)
     {
-        switch (theme)
+        if (_appliedTheme == theme) return;
+        _appliedTheme = theme;
+
+        if (theme == AppTheme.System)
         {
-            case AppTheme.Light: ApplicationThemeManager.Apply(ApplicationTheme.Light); break;
-            case AppTheme.Dark: ApplicationThemeManager.Apply(ApplicationTheme.Dark); break;
-            default: ApplicationThemeManager.ApplySystemTheme(); break;
+            ApplicationThemeManager.ApplySystemTheme();
+            if (!_watchingSystemTheme && _window is not null)
+            {
+                SystemThemeWatcher.Watch(_window);
+                _watchingSystemTheme = true;
+            }
+            return;
         }
+
+        if (_watchingSystemTheme && _window is not null)
+        {
+            SystemThemeWatcher.UnWatch(_window);
+            _watchingSystemTheme = false;
+        }
+        ApplicationThemeManager.Apply(theme == AppTheme.Light ? ApplicationTheme.Light : ApplicationTheme.Dark);
+    }
+
+    private FileLog GetLog() => _services?.Log ?? new FileLog(AppPaths.Default().LogsFolder);
+
+    private void FailStartup(Exception ex)
+    {
+        string path;
+        try { path = GetLog().Write(ex, "Startup failure"); }
+        catch { path = "(could not write log)"; }
+        System.Windows.MessageBox.Show($"F75 Studio could not start.\n\n{ex.Message}\n\nDetails: {path}", "F75 Studio", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Error);
+        try { _tray?.Dispose(); } catch { /* ignore */ }
+        try { _instance?.Dispose(); } catch { /* ignore */ }
+        Shutdown();
     }
 
     private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        var path = _services!.Log.Write(e.Exception, "Unhandled UI exception");
-        _tray?.Notify("F75 Studio hit an error", $"Details were written to {path}");
         e.Handled = true;
+        if (!_started)
+        {
+            FailStartup(e.Exception);
+            return;
+        }
+        var path = GetLog().Write(e.Exception, "Unhandled UI exception");
+        _tray?.Notify("F75 Studio hit an error", $"Details were written to {path}");
     }
 }
