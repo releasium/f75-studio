@@ -63,11 +63,16 @@ public partial class App : Application
         if (!e.Args.Contains("--tray")) ShowMainWindow();
     }
 
-    /// <summary>Builds the left navigation pages, in order. Tasks 10 and 11 replace this method.</summary>
+    /// <summary>Builds the left navigation pages, in order. Task 11 replaces this method.</summary>
     private static MainViewModel CreateMainViewModel(AppServices services)
     {
+        var hotkeys = new HotkeysViewModel(services);
         var settings = new SettingsViewModel(services, new RegistryStartupRegistration(AppExecutable.Path));
-        return new MainViewModel([new NavItem("Settings", SymbolRegular.Settings24, settings)]);
+        return new MainViewModel(
+        [
+            new NavItem("Hotkeys", SymbolRegular.Keyboard24, hotkeys),
+            new NavItem("Settings", SymbolRegular.Settings24, settings),
+        ]);
     }
 
     /// <summary>Handles arguments forwarded by a second instance. Plan 2 adds "--profile".</summary>

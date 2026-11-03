@@ -1,0 +1,201 @@
+<UserControl x:Class="F75Studio.App.Views.HotkeysView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:vm="clr-namespace:F75Studio.App.ViewModels"
+             xmlns:sys="clr-namespace:System;assembly=mscorlib"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance vm:HotkeysViewModel}"
+             PreviewKeyDown="OnPreviewKeyDown" PreviewKeyUp="OnPreviewKeyUp">
+    <UserControl.Resources>
+        <CollectionViewSource x:Key="GroupedItems" Source="{Binding Items}" IsLiveGroupingRequested="True">
+            <CollectionViewSource.GroupDescriptions>
+                <PropertyGroupDescription PropertyName="Group" />
+            </CollectionViewSource.GroupDescriptions>
+            <CollectionViewSource.LiveGroupingProperties>
+                <sys:String>Group</sys:String>
+            </CollectionViewSource.LiveGroupingProperties>
+        </CollectionViewSource>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Margin="24,8,24,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="0,0,0,12">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                <ui:Button Content="Add hotkey" Icon="{ui:SymbolIcon Add24}" Command="{Binding AddHotkeyCommand}" Margin="0,0,8,0" />
+                <ui:Button Content="Delete" Icon="{ui:SymbolIcon Delete24}" Command="{Binding DeleteCommand}" Margin="0,0,8,0" />
+                <ui:Button Content="Apply" Icon="{ui:SymbolIcon Checkmark24}" Appearance="Primary" Command="{Binding ApplyCommand}" />
+            </StackPanel>
+            <StackPanel>
+                <TextBlock Text="Hotkeys" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Opacity="0.7" Text="Build shortcuts visually. Apply writes Documents\F75Studio\hotkeys.ahk and runs it with AutoHotkey v2." />
+            </StackPanel>
+        </DockPanel>
+
+        <ui:InfoBar Grid.Row="1" Margin="0,0,0,12" Message="{Binding StatusMessage}"
+                    IsOpen="{Binding IsStatusOpen, Mode=TwoWay}" Severity="{Binding StatusSeverity}" IsClosable="True" />
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ListBox Grid.Column="0" ItemsSource="{Binding Source={StaticResource GroupedItems}}"
+                     SelectedItem="{Binding SelectedItem}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.GroupStyle>
+                    <GroupStyle>
+                        <GroupStyle.HeaderTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" Opacity="0.7" Margin="4,12,0,4" />
+                            </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                    </GroupStyle>
+                </ListBox.GroupStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:HotkeyItemViewModel}">
+                        <Grid Margin="4,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <StackPanel Orientation="Horizontal">
+                                    <ui:SymbolIcon Symbol="ErrorCircle24" Foreground="#FFE5484D" Margin="0,0,6,0"
+                                                   Visibility="{Binding Error, Converter={StaticResource NotNullVisible}}" />
+                                    <TextBlock Text="{Binding Trigger}" FontFamily="Cascadia Mono, Consolas" FontSize="14" FontWeight="SemiBold" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding Summary}" Opacity="0.7" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <ui:ToggleSwitch Grid.Column="1" IsChecked="{Binding Enabled}" VerticalAlignment="Center" />
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <ui:Card Grid.Column="2" VerticalAlignment="Stretch" VerticalContentAlignment="Stretch">
+                <Grid>
+                    <TextBlock Text="Add a hotkey to get started." Opacity="0.6" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Visibility="{Binding SelectedItem, Converter={StaticResource NullVisible}}" />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                  Visibility="{Binding SelectedItem, Converter={StaticResource NotNullVisible}}">
+                        <StackPanel DataContext="{Binding SelectedItem}">
+                            <TextBlock Text="Trigger" Style="{StaticResource FieldLabel}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBox Text="{Binding Trigger, UpdateSourceTrigger=PropertyChanged}" FontFamily="Cascadia Mono, Consolas"
+                                            PlaceholderText="e.g. ^!k or CapsLock &amp; h" />
+                                <ui:Button Grid.Column="1" Margin="8,0,0,0"
+                                           Command="{Binding DataContext.ToggleRecordingCommand, RelativeSource={RelativeSource AncestorType=UserControl}}">
+                                    <ui:Button.Style>
+                                        <Style TargetType="ui:Button" BasedOn="{StaticResource {x:Type ui:Button}}">
+                                            <Setter Property="Content" Value="Record" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding DataContext.IsRecording, RelativeSource={RelativeSource AncestorType=UserControl}}" Value="True">
+                                                    <Setter Property="Content" Value="Press keys…" />
+                                                    <Setter Property="Appearance" Value="Caution" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ui:Button.Style>
+                                </ui:Button>
+                            </Grid>
+                            <TextBlock FontSize="12" Opacity="0.6" TextWrapping="Wrap" Margin="0,4,0,12"
+                                       Text="Hold modifiers and press a key. For combos like CapsLock &amp; h, hold the first key and press the second. Other running AHK scripts can intercept keys while recording." />
+                            <TextBlock Text="{Binding Error}" Foreground="#FFE5484D" TextWrapping="Wrap" Margin="0,0,0,12"
+                                       Visibility="{Binding Error, Converter={StaticResource NotNullVisible}}" />
+
+                            <TextBlock Text="Group" Style="{StaticResource FieldLabel}" />
+                            <ui:TextBox Text="{Binding Group, UpdateSourceTrigger=LostFocus}" Margin="0,0,0,12" />
+
+                            <TextBlock Text="Only in app (optional)" Style="{StaticResource FieldLabel}" />
+                            <ui:TextBox Text="{Binding AppScope, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,12"
+                                        PlaceholderText="e.g. chrome.exe. Leave empty for everywhere." />
+
+                            <TextBlock Text="Action" Style="{StaticResource FieldLabel}" />
+                            <ComboBox Margin="0,0,0,12" ItemsSource="{x:Static vm:HotkeyItemViewModel.ActionOptions}"
+                                      DisplayMemberPath="Label" SelectedValuePath="Kind" SelectedValue="{Binding Kind}" />
+
+                            <StackPanel Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=SendKeys}">
+                                <TextBlock Text="Keys to send (AHK Send syntax)" Style="{StaticResource FieldLabel}" />
+                                <ui:TextBox Text="{Binding Keys, UpdateSourceTrigger=PropertyChanged}" FontFamily="Cascadia Mono, Consolas"
+                                            PlaceholderText="e.g. ^{Left} or {Home}" />
+                                <CheckBox Content="Blind mode (keeps held modifiers working)" IsChecked="{Binding Blind}" Margin="0,8,0,0" />
+                            </StackPanel>
+
+                            <StackPanel Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=Remap}">
+                                <TextBlock Text="Acts as key" Style="{StaticResource FieldLabel}" />
+                                <ui:TextBox Text="{Binding RemapTarget, UpdateSourceTrigger=PropertyChanged}" FontFamily="Cascadia Mono, Consolas"
+                                            PlaceholderText="e.g. Escape, AppsKey, b" />
+                            </StackPanel>
+
+                            <StackPanel Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=TypeText}">
+                                <TextBlock Text="Text to type" Style="{StaticResource FieldLabel}" />
+                                <ui:TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80" />
+                            </StackPanel>
+
+                            <StackPanel Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=Run}">
+                                <TextBlock Text="Program, file or URL" Style="{StaticResource FieldLabel}" />
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBox Text="{Binding RunTarget, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="e.g. notepad.exe or https://…" />
+                                    <ui:Button Grid.Column="1" Margin="8,0,0,0" Content="Browse…" Click="OnBrowseRunTarget" />
+                                </Grid>
+                                <TextBlock Text="Arguments (optional)" Style="{StaticResource FieldLabel}" />
+                                <ui:TextBox Text="{Binding RunArguments, UpdateSourceTrigger=PropertyChanged}" />
+                            </StackPanel>
+
+                            <StackPanel Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=Media}">
+                                <TextBlock Text="Media command" Style="{StaticResource FieldLabel}" />
+                                <ComboBox ItemsSource="{x:Static vm:HotkeyItemViewModel.MediaCommands}" SelectedItem="{Binding Media}" />
+                            </StackPanel>
+
+                            <StackPanel Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=SwitchLightingProfile}">
+                                <TextBlock Text="Lighting profile name" Style="{StaticResource FieldLabel}" />
+                                <ui:TextBox Text="{Binding ProfileName, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="e.g. Gaming" />
+                                <TextBlock FontSize="12" Opacity="0.6" TextWrapping="Wrap" Margin="0,4,0,0"
+                                           Text="Takes effect once the Keyboard page is available." />
+                            </StackPanel>
+
+                            <StackPanel Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=CustomCode}">
+                                <TextBlock Text="AutoHotkey v2 code" Style="{StaticResource FieldLabel}" />
+                                <ui:TextBox Text="{Binding Code, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" AcceptsTab="True"
+                                            FontFamily="Cascadia Mono, Consolas" MinHeight="160" TextWrapping="NoWrap" />
+                            </StackPanel>
+
+                            <TextBlock Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=Disable}"
+                                       Opacity="0.7" TextWrapping="Wrap" Text="Pressing the trigger does nothing." />
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </ui:Card>
+
+            <DockPanel Grid.Column="4">
+                <TextBlock DockPanel.Dock="Top" Text="Generated AutoHotkey v2" Style="{StaticResource FieldLabel}" />
+                <ui:TextBox Text="{Binding Preview, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
+                            FontFamily="Cascadia Mono, Consolas" FontSize="12" VerticalContentAlignment="Top"
+                            VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+            </DockPanel>
+        </Grid>
+    </Grid>
+</UserControl>
