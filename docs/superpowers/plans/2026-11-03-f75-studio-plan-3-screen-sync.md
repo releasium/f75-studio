@@ -683,7 +683,7 @@ Loop (runs via `Task.Run`, never on the UI thread):
 
 `tests/F75Studio.Tests/ScreenSyncEngineTests.cs` — use a fake clock (`long now`) whose `delay(ms)` advances `now` by `ms` and yields (`await Task.Yield()`), and a `FakeKeyboardDevice` as `ILiveLighting`. To make each test deterministic, wait for conditions with a helper `await WaitUntil(() => cond, timeoutMs: 2000)`. Tests:
 
-1. `Streams_mapped_edge_colours`: capture returns one all-red 64×36 frame then nulls; brightness 9 → after the first send, `LiveFrames[0][Esc led] == (255,0,0)` and interior `G == (77,0,0)` (255×0.3 = 76.5 → 77).
+1. `Streams_mapped_edge_colours`: capture returns one all-red 64×36 frame then nulls; brightness 9 → after the first send, `LiveFrames[0][Esc led] == (255,0,0)` and interior `G == (76,0,0)` (255×0.3 = 76.5 → `Math.Round` banker's rounding → 76).
 2. `Smoothing_moves_35_percent_per_frame`: frames red then blue (each once, then nulls). Second sent Esc colour = `(166, 0, 89)` (255 + (0−255)·0.35 = 165.75 → 166; 0 + 255·0.35 = 89.25 → 89).
 3. `Identical_output_is_only_resent_as_keep_alive`: one frame then nulls for 30 cycles (40 ms each = 1200 ms of fake time) → sends at t≈0, then keep-alives every 500 ms only: total 3 sends (assert `LiveFrames.Count == 3`).
 4. `Brightness_scales_output_and_zero_is_black`: brightness func returns 0 → first frame all black.
