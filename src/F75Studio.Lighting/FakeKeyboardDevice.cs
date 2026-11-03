@@ -1,12 +1,24 @@
 namespace F75Studio.Lighting;
 
 /// <summary>In-memory device: used by tests and when designing profiles without hardware.</summary>
-public sealed class FakeKeyboardDevice : IKeyboardDevice
+public sealed class FakeKeyboardDevice : IKeyboardDevice, ILiveLighting
 {
+    private readonly object _liveLock = new();
+    private volatile bool _isLive;
+    private int _liveStarts;
+    private int _liveStops;
+
     public DeviceStatus Status { get; private set; } = DeviceStatus.Connected;
     public string StatusText { get; private set; } = "Simulated keyboard";
     public List<LightingState> Applied { get; } = [];
     public Exception? FailWith { get; set; }
+
+    /// <summary>Frames passed to <see cref="SendLiveAsync"/>; lock on this list when reading while streaming.</summary>
+    public List<IReadOnlyDictionary<int, Rgb>> LiveFrames { get; } = [];
+    public Exception? LiveFailWith { get; set; }
+    public bool IsLive => _isLive;
+    public int LiveStarts => Volatile.Read(ref _liveStarts);
+    public int LiveStops => Volatile.Read(ref _liveStops);
 
     public event EventHandler? StatusChanged;
 
@@ -21,6 +33,30 @@ public sealed class FakeKeyboardDevice : IKeyboardDevice
     {
         if (FailWith is not null) return Task.FromException(FailWith);
         Applied.Add(state);
+        return Task.CompletedTask;
+    }
+
+    public Task StartLiveAsync(CancellationToken ct = default)
+    {
+        if (LiveFailWith is { } failure) return Task.FromException(failure);
+        if (Status != DeviceStatus.Connected) return Task.FromException(new KeyboardUnavailableException(StatusText));
+        _isLive = true;
+        Interlocked.Increment(ref _liveStarts);
+        return Task.CompletedTask;
+    }
+
+    public Task SendLiveAsync(IReadOnlyDictionary<int, Rgb> colors, CancellationToken ct = default)
+    {
+        if (LiveFailWith is { } failure) return Task.FromException(failure);
+        if (!_isLive) return Task.FromException(new KeyboardUnavailableException("Screen sync isn't running."));
+        lock (_liveLock) LiveFrames.Add(new Dictionary<int, Rgb>(colors));
+        return Task.CompletedTask;
+    }
+
+    public Task StopLiveAsync()
+    {
+        _isLive = false;
+        Interlocked.Increment(ref _liveStops);
         return Task.CompletedTask;
     }
 

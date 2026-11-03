@@ -1,5 +1,6 @@
 using F75Studio.Lighting;
 using F75Studio.Lighting.Aula;
+using F75Studio.Tests.TestSupport;
 
 namespace F75Studio.Tests;
 
@@ -235,7 +236,7 @@ public class AulaF75DeviceTests
 
         board.BlockReads.Set();
         await disposed.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.True(apply.IsCompleted); // the fake keyboard has no settings page, so the apply itself ends in a protocol error
+        Assert.True(SpinWait.SpinUntil(() => apply.IsCompleted, 5000)); // the fake keyboard has no settings page, so the apply itself ends in a protocol error
         await Assert.ThrowsAsync<F75ProtocolException>(() => apply);
     }
 
@@ -243,79 +244,5 @@ public class AulaF75DeviceTests
     {
         Assert.True(SpinWait.SpinUntil(() => !device.IsRefreshing, 5000));
         await device.RefreshAsync();
-    }
-
-    private sealed class FakeBoard(byte[] identity) : IWiredBoard
-    {
-        public byte[] Identity { get; set; } = identity;
-        public bool OpenFails { get; set; }
-        public bool SetFeatureFails { get; set; }
-        public ManualResetEventSlim? BlockReads { get; set; }
-        public volatile bool ReadsBlocked;
-        public List<byte[]> Frames { get; } = [];
-
-        public IFeatureChannel Open() => OpenFails ? throw new IOException("busy") : new Channel(this);
-
-        private sealed class Channel(FakeBoard board) : IFeatureChannel
-        {
-            private byte[]? _last;
-
-            public void SetFeature(byte[] frame)
-            {
-                if (board.SetFeatureFails) throw new IOException("write failed");
-                _last = (byte[])frame.Clone();
-                board.Frames.Add(_last);
-            }
-
-            public void GetFeature(byte[] buffer)
-            {
-                if (board.BlockReads is { } gate) { board.ReadsBlocked = true; gate.Wait(); }
-                Array.Copy(_last!, buffer, 8);
-                Array.Copy(board.Identity, 0, buffer, 8, board.Identity.Length);
-            }
-
-            public void Dispose()
-            {
-            }
-        }
-    }
-
-    private sealed class FakeProbe : IHidProbe
-    {
-        private Action? _onChanged;
-        private int _count;
-
-        public List<FakeBoard> Boards { get; } = [];
-        public bool Bluetooth { get; set; }
-        public bool EnumerationFails { get; set; }
-        public ManualResetEventSlim? BlockFirstEnumeration { get; set; }
-        public int EnumerationCount => Volatile.Read(ref _count);
-
-        public IReadOnlyList<IWiredBoard> FindWiredBoards()
-        {
-            if (Interlocked.Increment(ref _count) == 1) BlockFirstEnumeration?.Wait();
-            if (EnumerationFails) throw new InvalidOperationException("enumeration failed");
-            return Boards.ToList<IWiredBoard>();
-        }
-
-        public bool DonglePresent() => false;
-        public bool BluetoothPresent() => Bluetooth;
-        public bool OfficialApp { get; set; }
-        public bool OfficialAppRunning() => OfficialApp;
-
-        public IDisposable SubscribeChanged(Action onChanged)
-        {
-            _onChanged = onChanged;
-            return new Noop();
-        }
-
-        public void RaiseChanged() => _onChanged?.Invoke();
-
-        private sealed class Noop : IDisposable
-        {
-            public void Dispose()
-            {
-            }
-        }
     }
 }

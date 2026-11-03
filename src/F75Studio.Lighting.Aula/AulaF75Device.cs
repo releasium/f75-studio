@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 namespace F75Studio.Lighting.Aula;
 
-public sealed class AulaF75Device : IKeyboardDevice
+public sealed class AulaF75Device : IKeyboardDevice, ILiveLighting
 {
     public const int WiredVid = 0x258A;
     public const int WiredPid = 0x010C;
@@ -23,6 +23,9 @@ public sealed class AulaF75Device : IKeyboardDevice
     private volatile bool _disposed;
     private int _dirty;     // a hot-plug event arrived since the running refresh last started
     private int _scheduled; // a background refresh loop is queued or running
+    private IFeatureChannel? _liveChannel; // guarded by _gate
+    private F75Session? _liveSession;      // guarded by _gate
+    private volatile bool _isLive;
 
     public AulaF75Device() : this(new HidSharpProbe(), 500)
     {
@@ -67,6 +70,7 @@ public sealed class AulaF75Device : IKeyboardDevice
                 result = (DeviceStatus.Error, $"Couldn't check for the keyboard: {ex.Message}");
             }
             changed = SetStatus(result.Status, result.Text);
+            if (result.Status != DeviceStatus.Connected) EndLiveSession();
         }
         finally
         {
@@ -76,6 +80,8 @@ public sealed class AulaF75Device : IKeyboardDevice
         if (changed && !_disposed) RaiseStatusChanged();
     }
 
+    public bool IsLive => _isLive;
+
     public async Task ApplyAsync(LightingState state, CancellationToken ct = default)
     {
         ThrowIfDisposed();
@@ -83,45 +89,26 @@ public sealed class AulaF75Device : IKeyboardDevice
         try
         {
             ThrowIfDisposed();
-            var snapshot = _snapshot;
-            if (snapshot.Status != DeviceStatus.Connected) throw new KeyboardUnavailableException(snapshot.Text);
-            var boards = _probe.FindWiredBoards();
-            if (boards.Count == 0) throw new KeyboardUnavailableException("The keyboard was disconnected.");
-            if (_probe.OfficialAppRunning())
+            EndLiveSession(); // a stored apply replaces the live overlay; the transaction gap below is measured from here
+            var (channel, session, firstError) = await OpenKnownBoardAsync(ct).ConfigureAwait(false);
+            if (channel is null)
             {
-                ScheduleRefresh(); // moves the status to the "close the AULA app" error
-                throw new KeyboardUnavailableException(OfficialAppRunningText);
+                if (firstError is not null)
+                {
+                    ScheduleRefresh();
+                    throw new KeyboardUnavailableException($"Couldn't send lighting to the keyboard: {firstError.Message}");
+                }
+                throw new KeyboardUnavailableException("The keyboard no longer identifies as an AULA F75; nothing was sent.");
             }
 
-            Exception? firstError = null;
-            foreach (var board in boards)
+            using (channel)
             {
-                await WaitForTransactionGapAsync(ct).ConfigureAwait(false);
-                var applying = false;
                 try
                 {
-                    using var channel = board.Open();
-                    var session = new F75Session(channel);
-                    byte[] identity;
-                    try
-                    {
-                        identity = await session.ReadIdentityAsync(ct).ConfigureAwait(false);
-                    }
-                    catch (Exception ex) when (IsDeviceFailure(ex) || ex is F75ProtocolException)
-                    {
-                        firstError ??= ex;
-                        continue; // not talking to us; try the next candidate
-                    }
-
-                    if (!F75Protocol.IsKnownIdentity(identity)) continue;
-                    applying = true;
-                    await session.ApplyAsync(state, ct).ConfigureAwait(false);
-                    return;
+                    await session!.ApplyAsync(state, ct).ConfigureAwait(false);
                 }
                 catch (Exception ex) when (IsDeviceFailure(ex))
                 {
-                    firstError ??= ex;
-                    if (!applying) continue; // couldn't open this candidate; try the next one
                     ScheduleRefresh();
                     throw new KeyboardUnavailableException($"Couldn't send lighting to the keyboard: {ex.Message}");
                 }
@@ -130,18 +117,152 @@ public sealed class AulaF75Device : IKeyboardDevice
                     _lastTransactionEnd = Stopwatch.GetTimestamp();
                 }
             }
-
-            if (firstError is not null)
-            {
-                ScheduleRefresh();
-                throw new KeyboardUnavailableException($"Couldn't send lighting to the keyboard: {firstError.Message}");
-            }
-            throw new KeyboardUnavailableException("The keyboard no longer identifies as an AULA F75; nothing was sent.");
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    public async Task StartLiveAsync(CancellationToken ct = default)
+    {
+        ThrowIfDisposed();
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (_isLive) return;
+            var (channel, session, firstError) = await OpenKnownBoardAsync(ct).ConfigureAwait(false);
+            if (channel is null)
+            {
+                if (firstError is not null)
+                {
+                    ScheduleRefresh();
+                    throw new KeyboardUnavailableException($"Couldn't start screen sync: {firstError.Message}");
+                }
+                throw new KeyboardUnavailableException("The keyboard no longer identifies as an AULA F75; nothing was sent.");
+            }
+
+            _liveChannel = channel;
+            _liveSession = session;
+            _isLive = true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task SendLiveAsync(IReadOnlyDictionary<int, Rgb> colors, CancellationToken ct = default)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposed();
+            if (_liveSession is null) throw new KeyboardUnavailableException("Screen sync isn't running.");
+            try
+            {
+                await _liveSession.SendLiveFrameAsync(F75Protocol.BuildLiveFrame(colors), ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (IsDeviceFailure(ex))
+            {
+                EndLiveSession();
+                ScheduleRefresh();
+                throw new KeyboardUnavailableException($"Lost the keyboard while streaming: {ex.Message}");
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task StopLiveAsync()
+    {
+        try
+        {
+            await _gate.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                EndLiveSession();
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        catch (Exception)
+        {
+            // Stopping is best effort and must never throw.
+        }
+    }
+
+    /// <summary>Closes the live channel and clears the live state. Caller holds <c>_gate</c>. Never throws.</summary>
+    private void EndLiveSession()
+    {
+        var channel = _liveChannel;
+        _liveChannel = null;
+        _liveSession = null;
+        _isLive = false;
+        if (channel is null) return;
+        try
+        {
+            channel.Dispose();
+        }
+        catch (Exception)
+        {
+            // Already gone.
+        }
+        _lastTransactionEnd = Stopwatch.GetTimestamp();
+    }
+
+    /// <summary>
+    /// Shared by apply and live start (caller holds <c>_gate</c>): checks the status, the official app and each wired board's
+    /// identity on the same channel. Returns the open channel of the first known board (the caller owns it and stamps the
+    /// transaction end), or a null channel with the first device error (if any) when none qualified.
+    /// </summary>
+    private async Task<(IFeatureChannel? Channel, F75Session? Session, Exception? FirstError)> OpenKnownBoardAsync(CancellationToken ct)
+    {
+        var snapshot = _snapshot;
+        if (snapshot.Status != DeviceStatus.Connected) throw new KeyboardUnavailableException(snapshot.Text);
+        var boards = _probe.FindWiredBoards();
+        if (boards.Count == 0) throw new KeyboardUnavailableException("The keyboard was disconnected.");
+        if (_probe.OfficialAppRunning())
+        {
+            ScheduleRefresh(); // moves the status to the "close the AULA app" error
+            throw new KeyboardUnavailableException(OfficialAppRunningText);
+        }
+
+        Exception? firstError = null;
+        foreach (var board in boards)
+        {
+            await WaitForTransactionGapAsync(ct).ConfigureAwait(false);
+            IFeatureChannel? channel = null;
+            var keep = false;
+            try
+            {
+                channel = board.Open();
+                var session = new F75Session(channel);
+                var identity = await session.ReadIdentityAsync(ct).ConfigureAwait(false);
+                if (!F75Protocol.IsKnownIdentity(identity)) continue;
+                keep = true;
+                return (channel, session, firstError);
+            }
+            catch (Exception ex) when (IsDeviceFailure(ex) || ex is F75ProtocolException)
+            {
+                firstError ??= ex; // not talking to us; try the next candidate
+            }
+            finally
+            {
+                if (!keep)
+                {
+                    channel?.Dispose();
+                    _lastTransactionEnd = Stopwatch.GetTimestamp();
+                }
+            }
+        }
+
+        return (null, null, firstError);
     }
 
     public void Dispose()
@@ -151,7 +272,17 @@ public sealed class AulaF75Device : IKeyboardDevice
         // Let a transaction that is already on the wire finish (a half-applied sequence would leave the keyboard
         // inconsistent), but never hang the exit: give up after 3 s. A blocking wait is fine because all HID I/O
         // runs off the UI thread (ConfigureAwait(false) here, Task.Run in the view model).
-        if (_gate.Wait(DisposeWaitMs)) _gate.Release();
+        if (_gate.Wait(DisposeWaitMs))
+        {
+            try
+            {
+                EndLiveSession();
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
     }
 
     private static bool IsDeviceFailure(Exception ex) => ex is IOException or TimeoutException or UnauthorizedAccessException;
