@@ -33,6 +33,7 @@
     <ProjectReference Include="..\..\src\F75Studio.Core\F75Studio.Core.csproj" />
     <ProjectReference Include="..\..\src\F75Studio.Hotkeys\F75Studio.Hotkeys.csproj" />
     <ProjectReference Include="..\..\src\F75Studio.App\F75Studio.App.csproj" />
+    <ProjectReference Include="..\..\src\F75Studio.Lighting\F75Studio.Lighting.csproj" />
   </ItemGroup>
 
 </Project>

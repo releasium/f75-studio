@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\F75Studio.Core\F75Studio.Core.csproj" />
     <ProjectReference Include="..\F75Studio.Hotkeys\F75Studio.Hotkeys.csproj" />
+    <ProjectReference Include="..\F75Studio.Lighting\F75Studio.Lighting.csproj" />
   </ItemGroup>
 
   <ItemGroup>

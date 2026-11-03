@@ -16,6 +16,7 @@ public sealed class AppPaths
     public string DocumentsRoot { get; }
     public string SettingsFile => Path.Combine(DataRoot, "settings.json");
     public string HotkeysFile => Path.Combine(DataRoot, "hotkeys.json");
+    public string ProfilesFile => Path.Combine(DataRoot, "profiles.json");
     public string LogsFolder => Path.Combine(DataRoot, "logs");
     public string GeneratedScriptsFolder => Path.Combine(DocumentsRoot, "F75Studio");
     public string GeneratedHotkeysScript => Path.Combine(GeneratedScriptsFolder, "hotkeys.ahk");
