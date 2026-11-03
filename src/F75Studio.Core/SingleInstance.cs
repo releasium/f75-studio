@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -6,6 +7,9 @@ namespace F75Studio.Core;
 
 public sealed class SingleInstance : IDisposable
 {
+    private static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(500);
+
     private readonly string _name;
     private readonly Mutex _mutex;
     private readonly CancellationTokenSource _cts = new();
@@ -49,25 +53,60 @@ public sealed class SingleInstance : IDisposable
                 await using var server = new NamedPipeServerStream(PipeName(_name), PipeDirection.In, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
                 await server.WaitForConnectionAsync(ct);
                 using var reader = new StreamReader(server, Encoding.UTF8);
-                var args = JsonSerializer.Deserialize<string[]>(await reader.ReadToEndAsync(ct)) ?? [];
-                ArgumentsReceived?.Invoke(this, args);
+
+                // A client that connects and never finishes writing must not block the listener forever.
+                using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                readCts.CancelAfter(ReadTimeout);
+                var args = JsonSerializer.Deserialize<string[]>(await reader.ReadToEndAsync(readCts.Token)) ?? [];
+
+                try
+                {
+                    ArgumentsReceived?.Invoke(this, args);
+                }
+                catch (Exception)
+                {
+                    // A subscriber threw. Swallow it so forwarding keeps working for later messages.
+                }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 return;
             }
-            catch (Exception ex) when (ex is IOException or JsonException)
+            catch (OperationCanceledException)
             {
-                // A client sent garbage or disconnected early; keep listening.
+                // Per-connection read timeout: drop this client and keep listening.
+            }
+            catch (ObjectDisposedException)
+            {
+                // Dispose ran while this loop was between checks; treat as shutdown.
+                return;
+            }
+            catch (IOException)
+            {
+                // Typically "All pipe instances are busy". Back off so the loop does not spin.
+                try
+                {
+                    await Task.Delay(RetryDelay, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+            }
+            catch (JsonException)
+            {
+                // A client sent garbage; keep listening.
             }
         }
     }
 
-    private static string PipeName(string name) => $"{name}.Pipe.{Environment.UserName}";
+    private static string PipeName(string name) =>
+        $"{name}.Pipe.{Environment.UserName}.{Process.GetCurrentProcess().SessionId}";
 
     public void Dispose()
     {
         _cts.Cancel();
         _mutex.Dispose();
+        _cts.Dispose();
     }
 }
