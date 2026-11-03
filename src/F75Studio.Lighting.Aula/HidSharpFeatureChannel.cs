@@ -14,9 +14,20 @@ public sealed class HidSharpFeatureChannel : IFeatureChannel
     }
 
     public static HidSharpFeatureChannel Open(HidDevice device) =>
-        device.TryOpen(out var stream)
-            ? new HidSharpFeatureChannel(stream)
-            : throw new IOException("Couldn't open the keyboard's lighting interface.");
+        Wrap(device.TryOpen(out var stream) ? stream : throw new IOException("Couldn't open the keyboard's lighting interface."));
+
+    private static HidSharpFeatureChannel Wrap(HidStream stream)
+    {
+        try
+        {
+            return new HidSharpFeatureChannel(stream);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+    }
 
     public void SetFeature(byte[] frame) => _stream.SetFeature(frame);
 

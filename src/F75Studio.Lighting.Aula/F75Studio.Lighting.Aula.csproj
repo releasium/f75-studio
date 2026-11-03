@@ -5,6 +5,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="F75Studio.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="HidSharp" Version="2.6.4" />
   </ItemGroup>
 
