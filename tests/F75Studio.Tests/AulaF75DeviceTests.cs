@@ -186,6 +186,59 @@ public class AulaF75DeviceTests
         Assert.All(board.Frames, f => Assert.Equal(0x82, f[1] & 0xFF)); // only identity reads were sent
     }
 
+    [Fact]
+    public async Task Official_app_running_is_an_error_and_nothing_is_sent()
+    {
+        var board = new FakeBoard(KnownId);
+        var probe = new FakeProbe { Boards = { board }, OfficialApp = true };
+        using var device = new AulaF75Device(probe, 0);
+        await Settle(device);
+
+        Assert.Equal(DeviceStatus.Error, device.Status);
+        Assert.Equal(AulaF75Device.OfficialAppRunningText, device.StatusText);
+        Assert.Empty(board.Frames); // not even an identity read
+    }
+
+    [Fact]
+    public async Task Apply_refuses_and_sends_nothing_when_the_official_app_starts_after_detection()
+    {
+        var board = new FakeBoard(KnownId);
+        var probe = new FakeProbe { Boards = { board } };
+        using var device = new AulaF75Device(probe, 0);
+        await Settle(device);
+        Assert.Equal(DeviceStatus.Connected, device.Status);
+        var framesBefore = board.Frames.Count;
+
+        probe.OfficialApp = true;
+        var ex = await Assert.ThrowsAsync<KeyboardUnavailableException>(() => device.ApplyAsync(new LightingState()));
+
+        Assert.Equal(AulaF75Device.OfficialAppRunningText, ex.Message);
+        Assert.Equal(framesBefore, board.Frames.Count);
+        Assert.True(SpinWait.SpinUntil(() => device.Status == DeviceStatus.Error, 5000));
+    }
+
+    [Fact]
+    public async Task Dispose_waits_for_an_in_flight_apply()
+    {
+        var board = new FakeBoard(KnownId);
+        var probe = new FakeProbe { Boards = { board } };
+        var device = new AulaF75Device(probe, 0);
+        await Settle(device);
+
+        board.BlockReads = new ManualResetEventSlim(false);
+        var apply = Task.Run(() => device.ApplyAsync(new LightingState()));
+        Assert.True(SpinWait.SpinUntil(() => board.ReadsBlocked, 5000));
+
+        var disposed = Task.Run(device.Dispose);
+        await Task.Delay(300);
+        Assert.False(disposed.IsCompleted); // still waiting for the transaction on the wire
+
+        board.BlockReads.Set();
+        await disposed.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(apply.IsCompleted); // the fake keyboard has no settings page, so the apply itself ends in a protocol error
+        await Assert.ThrowsAsync<F75ProtocolException>(() => apply);
+    }
+
     private static async Task Settle(AulaF75Device device)
     {
         Assert.True(SpinWait.SpinUntil(() => !device.IsRefreshing, 5000));
@@ -197,6 +250,8 @@ public class AulaF75DeviceTests
         public byte[] Identity { get; set; } = identity;
         public bool OpenFails { get; set; }
         public bool SetFeatureFails { get; set; }
+        public ManualResetEventSlim? BlockReads { get; set; }
+        public volatile bool ReadsBlocked;
         public List<byte[]> Frames { get; } = [];
 
         public IFeatureChannel Open() => OpenFails ? throw new IOException("busy") : new Channel(this);
@@ -214,6 +269,7 @@ public class AulaF75DeviceTests
 
             public void GetFeature(byte[] buffer)
             {
+                if (board.BlockReads is { } gate) { board.ReadsBlocked = true; gate.Wait(); }
                 Array.Copy(_last!, buffer, 8);
                 Array.Copy(board.Identity, 0, buffer, 8, board.Identity.Length);
             }
@@ -244,6 +300,8 @@ public class AulaF75DeviceTests
 
         public bool DonglePresent() => false;
         public bool BluetoothPresent() => Bluetooth;
+        public bool OfficialApp { get; set; }
+        public bool OfficialAppRunning() => OfficialApp;
 
         public IDisposable SubscribeChanged(Action onChanged)
         {

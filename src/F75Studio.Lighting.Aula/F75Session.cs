@@ -35,22 +35,27 @@ public sealed class F75Session
 
         // Validate the settings page before anything is written, so a bad read changes nothing.
         var page = await ReadSettingsAsync(ct,
-            "The keyboard returned incomplete lighting data. Nothing was changed.");
+            "The keyboard returned incomplete lighting data. Nothing was changed.").ConfigureAwait(false);
 
         if (s.EffectId == EffectIds.PerKey)
         {
-            await _delay(30, ct);
-            await WriteAsync(F75Protocol.CmdPerKey, F75Protocol.BuildPerKey(s.KeyColors), ct);
+            await _delay(30, ct).ConfigureAwait(false);
+            await WriteAsync(F75Protocol.CmdPerKey, F75Protocol.BuildPerKey(s.KeyColors), ct).ConfigureAwait(false);
             wroteFirst = true;
             settingsWait = 100;
         }
         else if (definition.HasColor && !s.Colorful)
         {
-            var table = await ReadWithMarkerAsync(F75Protocol.CmdColorTable, F75Protocol.ColorTableLength, F75Protocol.ColorTableMarkerOffset, ct);
-            await _delay(120, ct);
-            await WriteAsync(F75Protocol.CmdColorTable, F75Protocol.PatchColorTable(table, s.EffectId, s.Color), ct);
-            wroteFirst = true;
-            settingsWait = 100;
+            var table = await ReadWithMarkerAsync(F75Protocol.CmdColorTable, F75Protocol.ColorTableLength, F75Protocol.ColorTableMarkerOffset, ct).ConfigureAwait(false);
+            var patchedTable = F75Protocol.PatchColorTable(table, s.EffectId, s.Color);
+            // Flash has limited write cycles: don't rewrite a table that already holds this colour.
+            if (!patchedTable.AsSpan().SequenceEqual(table))
+            {
+                await _delay(120, ct).ConfigureAwait(false);
+                await WriteAsync(F75Protocol.CmdColorTable, patchedTable, ct).ConfigureAwait(false);
+                wroteFirst = true;
+                settingsWait = 100;
+            }
         }
 
         if (wroteFirst)
@@ -58,36 +63,38 @@ public sealed class F75Session
             // Past the first write: finish the sequence regardless of cancellation so the keyboard is not left half-applied.
             ct = CancellationToken.None;
             page = await ReadSettingsAsync(ct,
-                "The keyboard returned incomplete lighting data after the colours were written; the effect was not switched. Try again.");
+                "The keyboard returned incomplete lighting data after the colours were written; the effect was not switched. Try again.").ConfigureAwait(false);
         }
 
-        await _delay(settingsWait, ct);
-        await WriteAsync(F75Protocol.CmdSettings, F75Protocol.PatchSettings(page, s), ct);
+        var patchedPage = F75Protocol.PatchSettings(page, s);
+        if (patchedPage.AsSpan().SequenceEqual(page)) return; // already what the keyboard holds: skip the flash write
+        await _delay(settingsWait, ct).ConfigureAwait(false);
+        await WriteAsync(F75Protocol.CmdSettings, patchedPage, ct).ConfigureAwait(false);
     }
 
     private async Task<byte[]> ReadSettingsAsync(CancellationToken ct, string failureMessage)
     {
-        await _delay(30, ct);
-        return await ReadWithMarkerAsync(F75Protocol.CmdSettings, F75Protocol.SettingsLength, F75Protocol.SettingsMarkerOffset, ct, failureMessage);
+        await _delay(30, ct).ConfigureAwait(false);
+        return await ReadWithMarkerAsync(F75Protocol.CmdSettings, F75Protocol.SettingsLength, F75Protocol.SettingsMarkerOffset, ct, failureMessage).ConfigureAwait(false);
     }
 
     private async Task<byte[]> ReadWithMarkerAsync(byte cmd, int length, int markerOffset, CancellationToken ct, string? failureMessage = null)
     {
         for (var attempt = 1; ; attempt++)
         {
-            var data = await ReadAsync(cmd, 0, length, ct);
+            var data = await ReadAsync(cmd, 0, length, ct).ConfigureAwait(false);
             if (F75Protocol.HasMarker(data, markerOffset)) return data;
             if (attempt == MarkerReadAttempts)
                 throw new F75ProtocolException(failureMessage ?? "The keyboard returned incomplete lighting data. Nothing was changed.");
-            await _delay(100, ct);
+            await _delay(100, ct).ConfigureAwait(false);
         }
     }
 
     private async Task<byte[]> ReadAsync(byte writeCmd, byte param, int length, CancellationToken ct)
     {
         var request = F75Protocol.ReadRequest(writeCmd, param, length);
-        await SendAsync(request, ct);
-        await _delay(20, ct);
+        await SendAsync(request, ct).ConfigureAwait(false);
+        await _delay(20, ct).ConfigureAwait(false);
         var reply = new byte[F75Protocol.FrameLength];
         reply[0] = F75Protocol.ReportId;
         _channel.GetFeature(reply);
@@ -99,7 +106,7 @@ public sealed class F75Session
 
     private async Task SendAsync(byte[] frame, CancellationToken ct)
     {
-        await _delay(20, ct);
+        await _delay(20, ct).ConfigureAwait(false);
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -109,7 +116,7 @@ public sealed class F75Session
             }
             catch (IOException) when (attempt < SetAttempts)
             {
-                await _delay(70, ct);
+                await _delay(70, ct).ConfigureAwait(false);
             }
         }
     }

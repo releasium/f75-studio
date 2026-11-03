@@ -480,4 +480,133 @@ public class KeyboardViewModelTests : IDisposable
         Assert.Equal(2, _device.Applied[^1].Brightness);
         Assert.Equal("Default", Store().Load().Active);
     }
+
+    [Fact]
+    public async Task Profiles_with_null_state_or_blank_names_are_dropped()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet
+        {
+            Profiles = [new("Broken", null!), new(null!, new LightingState()), new("  ", new LightingState()), new("Good", new LightingState { Brightness = 4 })],
+            Active = "Good",
+        });
+        var vm = Create(store);
+        await vm.PendingApply;
+
+        Assert.Equal(new[] { "Good" }, vm.ProfileNames);
+        Assert.Equal(4, vm.Brightness);
+    }
+
+    [Fact]
+    public async Task Only_invalid_profiles_fall_back_to_a_default_profile()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet { Profiles = [new("Broken", null!)], Active = "Broken" });
+        var vm = Create(store);
+        await vm.PendingApply;
+
+        Assert.Equal(new[] { "Default" }, vm.ProfileNames);
+        Assert.Equal("Default", vm.SelectedProfile);
+    }
+
+    [Fact]
+    public async Task Duplicate_profile_names_keep_the_first_case_insensitively()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet
+        {
+            Profiles = [new("Game", new LightingState { Brightness = 1 }), new("GAME", new LightingState { Brightness = 8 }), new("Work", new LightingState())],
+            Active = "game",
+        });
+        var vm = Create(store);
+        await vm.PendingApply;
+
+        Assert.Equal(new[] { "Game", "Work" }, vm.ProfileNames);
+        Assert.Equal("Game", vm.SelectedProfile);
+        Assert.Equal(1, vm.Brightness);
+    }
+
+    [Fact]
+    public async Task Null_key_colours_are_treated_as_empty()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet { Profiles = [new("P", new LightingState { KeyColors = null! })], Active = "P" });
+        var vm = Create(store);
+        await vm.PendingApply;
+
+        Assert.Empty(vm.CurrentState.KeyColors);
+    }
+
+    [Fact]
+    public async Task Key_colours_for_leds_that_are_not_keys_are_ignored()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet
+        {
+            Profiles = [new("P", new LightingState { EffectId = EffectIds.PerKey, KeyColors = new Dictionary<int, Rgb> { [14] = Rgb.White, [84] = Rgb.White, [100] = Rgb.White } })],
+            Active = "P",
+        });
+        var vm = Create(store);
+        await vm.PendingApply;
+
+        Assert.Equal(new[] { 14 }, vm.CurrentState.KeyColors.Keys);
+    }
+
+    [Fact]
+    public async Task Unreadable_profiles_file_uses_defaults_shows_an_error_and_is_not_overwritten()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet { Profiles = [new("Mine", new LightingState { Brightness = 2 })], Active = "Mine" });
+        var before = File.ReadAllText(store.FilePath);
+
+        KeyboardViewModel vm;
+        using (new FileStream(store.FilePath, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            vm = Create(store);
+        }
+        await vm.PendingApply;
+
+        Assert.Equal(new[] { "Default" }, vm.ProfileNames);
+        Assert.Equal(InfoBarSeverity.Error, vm.StatusSeverity);
+        Assert.Contains("Couldn't read lighting profiles", vm.StatusMessage);
+        Assert.Equal(before, File.ReadAllText(store.FilePath));
+    }
+
+    [Fact]
+    public async Task No_forced_apply_at_startup_when_the_keyboard_is_not_on_the_cable()
+    {
+        _device.SetStatus(DeviceStatus.Bluetooth, "Bluetooth");
+        var vm = Create();
+        await vm.PendingApply;
+
+        Assert.Empty(_device.Applied);
+        Assert.Null(vm.StatusMessage); // no warning on a normal Bluetooth launch
+    }
+
+    [Fact]
+    public void Status_changes_during_construction_are_not_lost()
+    {
+        var device = new SwitchingDevice();
+        var vm = new KeyboardViewModel(device, Store(), _ => Task.CompletedTask);
+        Assert.Equal(1, device.SubscriberCountWhenStatusRead);
+        GC.KeepAlive(vm);
+    }
+
+    private sealed class SwitchingDevice : IKeyboardDevice
+    {
+        private EventHandler? _handlers;
+        public int SubscriberCountWhenStatusRead { get; private set; } = -1;
+        public DeviceStatus Status
+        {
+            get
+            {
+                if (SubscriberCountWhenStatusRead < 0) SubscriberCountWhenStatusRead = _handlers?.GetInvocationList().Length ?? 0;
+                return DeviceStatus.Bluetooth;
+            }
+        }
+        public string StatusText => "Bluetooth";
+        public event EventHandler? StatusChanged { add => _handlers += value; remove => _handlers -= value; }
+        public Task ApplyAsync(LightingState state, CancellationToken ct = default) => Task.CompletedTask;
+        public void Dispose() { }
+    }
 }

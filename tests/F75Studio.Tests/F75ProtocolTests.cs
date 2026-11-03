@@ -233,6 +233,7 @@ public class F75ProtocolTests
             [9] = new(0, 255, 0),
             [89] = new(0, 0, 255),
             [200] = Rgb.White, // out of range: ignored
+            [84] = Rgb.White, // volume knob LED: not a key, ignored
         });
 
         Assert.Equal(378, data.Length);

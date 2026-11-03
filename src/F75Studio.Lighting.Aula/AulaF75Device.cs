@@ -9,6 +9,9 @@ public sealed class AulaF75Device : IKeyboardDevice
     public const int WirelessVid = 0x3554;
     public const int DonglePid = 0xFA09;
 
+    internal const string OfficialAppRunningText = "The AULA F75 app is running. Close it so F75 Studio can control the lighting.";
+    private const int DisposeWaitMs = 3000;
+
     private sealed record Snapshot(DeviceStatus Status, string Text);
 
     private readonly IHidProbe _probe;
@@ -51,13 +54,13 @@ public sealed class AulaF75Device : IKeyboardDevice
     public async Task RefreshAsync()
     {
         var changed = false;
-        await _gate.WaitAsync();
+        await _gate.WaitAsync().ConfigureAwait(false);
         try
         {
             (DeviceStatus Status, string Text) result;
             try
             {
-                result = await DetectAsync();
+                result = await DetectAsync().ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -76,7 +79,7 @@ public sealed class AulaF75Device : IKeyboardDevice
     public async Task ApplyAsync(LightingState state, CancellationToken ct = default)
     {
         ThrowIfDisposed();
-        await _gate.WaitAsync(ct);
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             ThrowIfDisposed();
@@ -84,11 +87,16 @@ public sealed class AulaF75Device : IKeyboardDevice
             if (snapshot.Status != DeviceStatus.Connected) throw new KeyboardUnavailableException(snapshot.Text);
             var boards = _probe.FindWiredBoards();
             if (boards.Count == 0) throw new KeyboardUnavailableException("The keyboard was disconnected.");
+            if (_probe.OfficialAppRunning())
+            {
+                ScheduleRefresh(); // moves the status to the "close the AULA app" error
+                throw new KeyboardUnavailableException(OfficialAppRunningText);
+            }
 
             Exception? firstError = null;
             foreach (var board in boards)
             {
-                await WaitForTransactionGapAsync(ct);
+                await WaitForTransactionGapAsync(ct).ConfigureAwait(false);
                 var applying = false;
                 try
                 {
@@ -97,7 +105,7 @@ public sealed class AulaF75Device : IKeyboardDevice
                     byte[] identity;
                     try
                     {
-                        identity = await session.ReadIdentityAsync(ct);
+                        identity = await session.ReadIdentityAsync(ct).ConfigureAwait(false);
                     }
                     catch (Exception ex) when (IsDeviceFailure(ex) || ex is F75ProtocolException)
                     {
@@ -107,7 +115,7 @@ public sealed class AulaF75Device : IKeyboardDevice
 
                     if (!F75Protocol.IsKnownIdentity(identity)) continue;
                     applying = true;
-                    await session.ApplyAsync(state, ct);
+                    await session.ApplyAsync(state, ct).ConfigureAwait(false);
                     return;
                 }
                 catch (Exception ex) when (IsDeviceFailure(ex))
@@ -140,6 +148,10 @@ public sealed class AulaF75Device : IKeyboardDevice
     {
         _disposed = true;
         _subscription.Dispose();
+        // Let a transaction that is already on the wire finish (a half-applied sequence would leave the keyboard
+        // inconsistent), but never hang the exit: give up after 3 s. A blocking wait is fine because all HID I/O
+        // runs off the UI thread (ConfigureAwait(false) here, Task.Run in the view model).
+        if (_gate.Wait(DisposeWaitMs)) _gate.Release();
     }
 
     private static bool IsDeviceFailure(Exception ex) => ex is IOException or TimeoutException or UnauthorizedAccessException;
@@ -163,9 +175,9 @@ public sealed class AulaF75Device : IKeyboardDevice
         while (true)
         {
             Interlocked.Exchange(ref _dirty, 0);
-            await RefreshAsync();
+            await RefreshAsync().ConfigureAwait(false);
             if (Volatile.Read(ref _dirty) != 0) continue;
-            Volatile.Write(ref _scheduled, 0);
+            Interlocked.Exchange(ref _scheduled, 0);
             // An event may have landed between the check and the reset; reclaim the loop if so.
             if (Volatile.Read(ref _dirty) != 0 && Interlocked.CompareExchange(ref _scheduled, 1, 0) == 0) continue;
             return;
@@ -177,7 +189,7 @@ public sealed class AulaF75Device : IKeyboardDevice
     {
         if (_lastTransactionEnd == 0) return;
         var remaining = _transactionGapMs - (int)Stopwatch.GetElapsedTime(_lastTransactionEnd).TotalMilliseconds;
-        if (remaining > 0) await Task.Delay(remaining, ct);
+        if (remaining > 0) await Task.Delay(remaining, ct).ConfigureAwait(false);
     }
 
     private async Task<(DeviceStatus, string)> DetectAsync()
@@ -185,17 +197,19 @@ public sealed class AulaF75Device : IKeyboardDevice
         var boards = _probe.FindWiredBoards();
         if (boards.Count > 0)
         {
+            // The official driver talks to the same collection; don't fight it (and send nothing, not even a read).
+            if (_probe.OfficialAppRunning()) return (DeviceStatus.Error, OfficialAppRunningText);
             Exception? firstError = null;
             byte[]? unknownIdentity = null;
             foreach (var board in boards)
             {
                 try
                 {
-                    await WaitForTransactionGapAsync(CancellationToken.None);
+                    await WaitForTransactionGapAsync(CancellationToken.None).ConfigureAwait(false);
                     try
                     {
                         using var channel = board.Open();
-                        var identity = await new F75Session(channel).ReadIdentityAsync(CancellationToken.None);
+                        var identity = await new F75Session(channel).ReadIdentityAsync(CancellationToken.None).ConfigureAwait(false);
                         if (F75Protocol.IsKnownIdentity(identity)) return (DeviceStatus.Connected, "Connected by USB cable");
                         unknownIdentity ??= identity;
                     }

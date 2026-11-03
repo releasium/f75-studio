@@ -13,6 +13,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
 {
     private static readonly Rgb OffPreview = new(0x20, 0x20, 0x20);
     private static readonly Rgb UnsetKeyPreview = new(0x10, 0x10, 0x10);
+    private static readonly HashSet<int> RealLeds = F75Layout.Keys.Select(k => k.Led).ToHashSet();
 
     private readonly IKeyboardDevice _device;
     private readonly JsonFileStore<LightingProfileSet> _store;
@@ -28,6 +29,8 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private bool _forcePending;
     private int _deviceSeq;
     private string? _lastSaveError;
+    private bool _initializing;
+    private bool _loadFailed;
 
     [ObservableProperty] private EffectDefinition _selectedEffect = F75Effects.Get(EffectIds.FixedOn);
     [ObservableProperty] private int _brightness = 9;
@@ -50,29 +53,71 @@ public sealed partial class KeyboardViewModel : ObservableObject
         _store = store;
         _debounce = debounce ?? (ct => Task.Delay(500, ct));
         Keys = F75Layout.Keys.Select(k => new KeyItemViewModel(k)).ToList();
+        _initializing = true;
+        // Subscribe before reading the status so a change in between is not lost.
+        device.StatusChanged += (_, _) => Ui.Run(OnDeviceStatusChanged);
         _deviceStatus = device.Status;
         _deviceStatusText = device.StatusText;
-        device.StatusChanged += (_, _) => Ui.Run(OnDeviceStatusChanged);
 
-        var set = store.Load();
-        _profiles = set.Profiles.ToList();
-        if (_profiles.Count == 0)
+        LightingProfileSet set;
+        string? loadError = null;
+        try
+        {
+            set = store.Load();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Unreadable (locked, no access): run on defaults, and don't overwrite the file we couldn't read.
+            set = new LightingProfileSet();
+            _loadFailed = true;
+            loadError = $"Couldn't read lighting profiles ({ex.Message}). Using defaults; your saved profiles were left untouched.";
+        }
+
+        _profiles = Sanitize(set.Profiles);
+        var createdDefault = _profiles.Count == 0;
+        if (createdDefault)
         {
             _profiles.Add(new LightingProfile("Default", new LightingState()));
             set = new LightingProfileSet { Profiles = _profiles.ToList(), Active = "Default" };
-            try
+            if (!_loadFailed)
             {
-                store.Save(set);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                _lastSaveError = $"Couldn't save lighting profiles: {ex.Message}";
-                SetStatus(_lastSaveError, InfoBarSeverity.Error);
+                try
+                {
+                    store.Save(set);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _lastSaveError = $"Couldn't save lighting profiles: {ex.Message}";
+                    SetStatus(_lastSaveError, InfoBarSeverity.Error);
+                }
             }
         }
         foreach (var p in _profiles) ProfileNames.Add(p.Name);
         SelectedProfile = _profiles.Any(p => p.Name == set.Active) ? set.Active : _profiles[0].Name;
+        _initializing = false;
+        if (loadError is not null)
+        {
+            _lastSaveError = loadError; // keeps the error showing instead of "Applied" until a save succeeds
+            SetStatus(loadError, InfoBarSeverity.Error);
+        }
     }
+
+    /// <summary>Drops unusable entries from a hand-edited file: null/blank names or state, duplicate names (first wins), non-key LEDs.</summary>
+    private static List<LightingProfile> Sanitize(IReadOnlyList<LightingProfile>? profiles)
+    {
+        var result = new List<LightingProfile>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in profiles ?? [])
+        {
+            if (p is null || string.IsNullOrWhiteSpace(p.Name) || p.State is null) continue;
+            if (!seen.Add(p.Name)) continue;
+            result.Add(p with { State = p.State with { KeyColors = RealKeyColors(p.State.KeyColors) } });
+        }
+        return result;
+    }
+
+    private static Dictionary<int, Rgb> RealKeyColors(IReadOnlyDictionary<int, Rgb>? colors) =>
+        colors is null ? [] : colors.Where(kv => RealLeds.Contains(kv.Key)).ToDictionary(kv => kv.Key, kv => kv.Value);
 
     public IReadOnlyList<EffectDefinition> Effects => F75Effects.All;
     public IReadOnlyList<KeyItemViewModel> Keys { get; }
@@ -175,6 +220,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private void RenameProfile()
     {
         var newName = ProfileNameEdit.Trim();
+        _loadFailed = false;
         if (newName.Length == 0 || _activeProfileName is null) return;
         if (ProfileNames.Any(n => n != _activeProfileName && string.Equals(n, newName, StringComparison.OrdinalIgnoreCase)))
         {
@@ -207,6 +253,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
             SetStatus("You need at least one lighting profile.", InfoBarSeverity.Error);
             return;
         }
+        _loadFailed = false;
         var index = _profiles.FindIndex(p => p.Name == _activeProfileName);
         if (index < 0) return;
         _profiles.RemoveAt(index);
@@ -246,7 +293,8 @@ public sealed partial class KeyboardViewModel : ObservableObject
         Load(profile.State);
         ProfileNameEdit = value;
         Save();
-        ScheduleApply(force: true);
+        // At startup, skip the forced apply while the keyboard is not on the cable (the Connected transition applies later).
+        if (!_initializing || _device.Status == DeviceStatus.Connected) ScheduleApply(force: true);
     }
 
     partial void OnSelectedEffectChanged(EffectDefinition value)
@@ -297,6 +345,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
 
     private void AddProfile(string name)
     {
+        _loadFailed = false;
         _profiles.Add(new LightingProfile(name, CurrentState));
         ProfileNames.Add(name);
         _activeProfileName = name;
@@ -325,7 +374,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
             Color = s.Color;
             SyncHueFrom(s.Color); // Color may be unchanged (no notification), so sync explicitly
             Colorful = s.Colorful;
-            _keyColors = new Dictionary<int, Rgb>(s.KeyColors);
+            _keyColors = RealKeyColors(s.KeyColors);
         }
         finally
         {
@@ -376,6 +425,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private void OnStateChanged()
     {
         if (_loading) return;
+        _loadFailed = false; // a real user edit: saving is allowed again
         RefreshPreview();
         var index = _profiles.FindIndex(p => p.Name == _activeProfileName);
         if (index >= 0) _profiles[index] = _profiles[index] with { State = CurrentState };
@@ -384,6 +434,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
 
     private void Save()
     {
+        if (_loadFailed) return; // never overwrite a profiles file we couldn't read, until the user changes something
         try
         {
             _store.Save(new LightingProfileSet { Profiles = _profiles.ToList(), Active = _activeProfileName });
@@ -423,7 +474,8 @@ public sealed partial class KeyboardViewModel : ObservableObject
             _forcePending = false;
             mine = ++_deviceSeq;
             _lastApplied = null; // unknown until the write finishes, so a revert during the write is not skipped
-            await _device.ApplyAsync(state, CancellationToken.None);
+            // HID I/O (even HidSharp's synchronous parts) runs on the pool; this method resumes on the UI context.
+            await Task.Run(() => _device.ApplyAsync(state, CancellationToken.None));
             if (mine == _deviceSeq) _lastApplied = state;
             if (_lastSaveError is { } saveError) Report(saveError, InfoBarSeverity.Error);
             else Report("Applied to keyboard.", InfoBarSeverity.Success);

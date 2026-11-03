@@ -37,13 +37,47 @@ public class F75SessionTests
     [Fact]
     public async Task Static_colour_validates_settings_then_writes_colour_table_then_settings()
     {
-        await Session().ApplyAsync(new LightingState { EffectId = 1, Color = new Rgb(255, 0, 0) }, CancellationToken.None);
+        await Session().ApplyAsync(new LightingState { EffectId = 1, Color = new Rgb(255, 0, 0), Brightness = 5 }, CancellationToken.None);
 
         Assert.Equal(new byte[] { 0x84, 0x8A, 0x0A, 0x84, 0x04 }, _channel.Sent.Select(Cmd).ToArray());
         Assert.Equal(new byte[] { 255, 0, 0 }, _channel.ColorTable[21..24]);
         Assert.Equal(1, _channel.SettingsPage[0x0A]);
         // 30 + read(20,20) | read table(20,20) | 120 | write(20) | 30 + read(20,20) | 100 | write(20)
         Assert.Equal(new[] { 30, 20, 20, 20, 20, 120, 20, 30, 20, 20, 100, 20 }, _delays);
+    }
+
+    [Fact]
+    public async Task Applying_the_same_state_twice_writes_nothing_the_second_time()
+    {
+        var state = new LightingState { EffectId = 1, Color = new Rgb(255, 0, 0) };
+        await Session().ApplyAsync(state, CancellationToken.None);
+        _channel.Sent.Clear();
+
+        await Session().ApplyAsync(state, CancellationToken.None);
+
+        Assert.Empty(_channel.Writes); // no 0x0A, no 0x04
+    }
+
+    [Fact]
+    public async Task Brightness_only_change_on_a_colourful_effect_writes_only_the_settings_page()
+    {
+        await Session().ApplyAsync(new LightingState { EffectId = 2, Colorful = true, Brightness = 9 }, CancellationToken.None);
+        _channel.Sent.Clear();
+
+        await Session().ApplyAsync(new LightingState { EffectId = 2, Colorful = true, Brightness = 4 }, CancellationToken.None);
+
+        Assert.Equal(new byte[] { 0x04 }, _channel.Writes.Select(Cmd).ToArray());
+    }
+
+    [Fact]
+    public async Task Unchanged_colour_table_is_not_rewritten_but_a_changed_effect_still_is()
+    {
+        await Session().ApplyAsync(new LightingState { EffectId = 1, Color = new Rgb(1, 2, 3) }, CancellationToken.None);
+        _channel.Sent.Clear();
+
+        await Session().ApplyAsync(new LightingState { EffectId = 1, Color = new Rgb(1, 2, 3), Brightness = 2 }, CancellationToken.None);
+
+        Assert.Equal(new byte[] { 0x04 }, _channel.Writes.Select(Cmd).ToArray()); // table same, settings differ
     }
 
     [Fact]
@@ -185,7 +219,7 @@ public class F75SessionTests
             return Task.CompletedTask;
         });
 
-        await session.ApplyAsync(new LightingState { EffectId = 1, Color = new Rgb(5, 6, 7) }, cts.Token);
+        await session.ApplyAsync(new LightingState { EffectId = 1, Color = new Rgb(5, 6, 7), Brightness = 5 }, cts.Token);
 
         Assert.True(cts.IsCancellationRequested);
         Assert.Equal(new byte[] { 0x0A, 0x04 }, _channel.Writes.Select(Cmd).ToArray());

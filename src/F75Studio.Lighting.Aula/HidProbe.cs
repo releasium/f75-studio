@@ -15,6 +15,9 @@ internal interface IHidProbe
     bool DonglePresent();
     bool BluetoothPresent();
 
+    /// <summary>True while AULA's own driver app (OemDrv) is running.</summary>
+    bool OfficialAppRunning();
+
     /// <summary>Calls <paramref name="onChanged"/> whenever the HID device list changes; dispose to unsubscribe.</summary>
     IDisposable SubscribeChanged(Action onChanged);
 }
@@ -34,6 +37,20 @@ internal sealed class HidSharpProbe : IHidProbe
 
     public bool BluetoothPresent() =>
         BluetoothPids.Any(pid => DeviceList.Local.GetHidDevices(AulaF75Device.WirelessVid, pid).Any());
+
+    public bool OfficialAppRunning()
+    {
+        try
+        {
+            var processes = System.Diagnostics.Process.GetProcessesByName("OemDrv");
+            foreach (var p in processes) p.Dispose();
+            return processes.Length > 0;
+        }
+        catch (Exception)
+        {
+            return false; // can't tell: don't block lighting on a failed process query
+        }
+    }
 
     public IDisposable SubscribeChanged(Action onChanged)
     {

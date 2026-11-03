@@ -143,13 +143,15 @@ public static class F75Protocol
         return t;
     }
 
+    private static readonly HashSet<int> RealLeds = F75Layout.Keys.Select(k => k.Led).ToHashSet();
+
     /// <summary>378 bytes, planar: R[126], G[126], B[126] by LED index (protocol doc §7.1).</summary>
     public static byte[] BuildPerKey(IReadOnlyDictionary<int, Rgb> colors)
     {
         var data = new byte[PerKeyLength];
         foreach (var (led, color) in colors)
         {
-            if (led is < 0 or >= PlaneSize) continue;
+            if (led is < 0 or >= PlaneSize || !RealLeds.Contains(led)) continue; // knob, unused and out-of-range LEDs are not keys
             data[led] = color.R;
             data[PlaneSize + led] = color.G;
             data[2 * PlaneSize + led] = color.B;
