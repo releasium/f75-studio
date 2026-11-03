@@ -37,6 +37,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private int _baseEffectId = EffectIds.FixedOn;
     private int _brightnessForLive = 9;
+    private int _liveEffectId = EffectIds.ScreenSync; // read by the engine's mapper on its own thread
     private bool _screenRunning;
     private bool _locked;
     private bool _suspended;
@@ -333,6 +334,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     partial void OnSelectedEffectChanged(EffectDefinition value)
     {
         if (!value.IsLive) _baseEffectId = value.Id;
+        Volatile.Write(ref _liveEffectId, value.Id);
         _faulted = false; // choosing an effect (or loading a profile) allows screen sync to start again
         OnPropertyChanged(nameof(ShowSpeed));
         OnPropertyChanged(nameof(ShowBrightness));
@@ -515,7 +517,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
             if (ct.IsCancellationRequested) return;
             Save();
             // While a live effect is selected the keyboard only gets stored writes when forced (never on brightness drags).
-            if (!_forcePending && state.EffectId == EffectIds.ScreenSync) return;
+            if (!_forcePending && IsLiveEffect(state.EffectId)) return;
             var stored = state.StoredState();
             if (!_forcePending && _lastApplied is { } last && WireEqual(last, stored)) return;
             _forcePending = false;
@@ -535,7 +537,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
                 if (_screenRunning && _screenSync is not null)
                 {
                     // Still streaming a live effect whose stored part is already on the keyboard: nothing to write.
-                    if (state.EffectId == EffectIds.ScreenSync && _lastApplied is { } onKeyboard && WireEqual(onKeyboard, stored))
+                    if (IsLiveEffect(state.EffectId) && _lastApplied is { } onKeyboard && WireEqual(onKeyboard, stored))
                         return;
                     try { await _screenSync.StopAsync(); }
                     catch { /* the engine cleans up after itself */ }
@@ -640,6 +642,8 @@ public sealed partial class KeyboardViewModel : ObservableObject
         UpdateScreenSync();
     }
 
+    private static bool IsLiveEffect(int id) => F75Effects.IsSupported(id) && F75Effects.Get(id).IsLive;
+
     private bool ShouldRunScreenSync() =>
         _screenSync is not null && SelectedEffect.IsLive && DeviceStatus == DeviceStatus.Connected
         && !_locked && !_suspended && !_faulted && !_exiting;
@@ -700,7 +704,9 @@ public sealed partial class KeyboardViewModel : ObservableObject
                 wroteStored = true;
                 await Task.Run(() => _device.ApplyAsync(perKey, CancellationToken.None));
             }
-            await Task.Run(() => sync.StartAsync(() => Volatile.Read(ref _brightnessForLive)));
+            await Task.Run(() => sync.StartAsync(
+                () => Volatile.Read(ref _brightnessForLive),
+                frame => Volatile.Read(ref _liveEffectId) == EffectIds.ScreenSyncBlur ? BlurMapper.Map(frame) : EdgeMapper.Map(frame)));
         }
         catch (Exception ex)
         {

@@ -56,6 +56,118 @@ public class KeyboardScreenSyncTests : IDisposable
         Assert.All(_device.Applied, s => Assert.NotEqual(EffectIds.ScreenSync, s.EffectId));
     }
 
+    private static CapturedFrame SyntheticFrame()
+    {
+        const int w = 64, h = 36;
+        var bgra = new byte[w * h * 4];
+        for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
+            {
+                var i = (y * w + x) * 4;
+                bgra[i] = (byte)(x * 4);
+                bgra[i + 1] = (byte)(y * 7);
+                bgra[i + 2] = (byte)((x * y) % 256);
+                bgra[i + 3] = 255;
+            }
+        return new CapturedFrame(w, h, bgra);
+    }
+
+    private static void AssertSameMap(IReadOnlyDictionary<int, Rgb> expected, IReadOnlyDictionary<int, Rgb> actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        foreach (var (k, v) in expected) Assert.Equal(v, actual[k]);
+    }
+
+    private async Task<KeyboardViewModel> RunningBlurAsync()
+    {
+        var vm = Create();
+        await SettleAsync(vm);
+        vm.SelectedEffect = F75Effects.Get(EffectIds.ScreenSyncBlur);
+        await SettleAsync(vm);
+        Assert.Equal(1, _sync.Starts);
+        return vm;
+    }
+
+    [Fact]
+    public async Task Selecting_blur_on_cable_starts_the_engine_with_the_blur_mapper()
+    {
+        var frame = SyntheticFrame();
+        var edge = EdgeMapper.Map(frame);
+        Assert.False(BlurMapper.Map(frame).All(kv => edge.TryGetValue(kv.Key, out var e) && e == kv.Value)); // frame distinguishes the mappers
+
+        var vm = await RunningBlurAsync();
+
+        Assert.True(vm.IsScreenSyncRunning);
+        AssertSameMap(BlurMapper.Map(frame), _sync.LastMapper!(frame));
+    }
+
+    [Fact]
+    public async Task Edges_to_blur_while_running_swaps_the_mapper_without_restart_or_write()
+    {
+        var frame = SyntheticFrame();
+        var vm = await RunningAsync();
+        AssertSameMap(EdgeMapper.Map(frame), _sync.LastMapper!(frame));
+        var count = _device.Applied.Count;
+
+        vm.SelectedEffect = F75Effects.Get(EffectIds.ScreenSyncBlur);
+        await SettleAsync(vm);
+
+        Assert.Equal(1, _sync.Starts);
+        Assert.Equal(0, _sync.Stops);
+        Assert.Equal(count, _device.Applied.Count);
+        Assert.True(vm.IsScreenSyncRunning);
+        AssertSameMap(BlurMapper.Map(frame), _sync.LastMapper!(frame));
+        var saved = Store().Load().Profiles.Single().State;
+        Assert.Equal(EffectIds.ScreenSyncBlur, saved.EffectId);
+        Assert.Equal(EffectIds.FixedOn, saved.BaseEffectId);
+    }
+
+    [Fact]
+    public async Task Blur_to_static_stops_and_restores_the_stored_effect()
+    {
+        var vm = await RunningBlurAsync();
+
+        vm.SelectedEffect = F75Effects.Get(2);
+        await SettleAsync(vm);
+
+        Assert.Equal(1, _sync.Stops);
+        Assert.False(vm.IsScreenSyncRunning);
+        Assert.Equal(2, _device.Applied[^1].EffectId);
+    }
+
+    [Fact]
+    public async Task Brightness_changes_while_blur_runs_do_not_write_flash()
+    {
+        var vm = await RunningBlurAsync();
+        var count = _device.Applied.Count;
+
+        foreach (var b in new[] { 3, 5, 7 })
+        {
+            vm.Brightness = b;
+            await SettleAsync(vm);
+        }
+
+        Assert.Equal(count, _device.Applied.Count);
+        Assert.Equal(7, _sync.Brightness!());
+    }
+
+    [Fact]
+    public async Task Loading_a_blur_profile_starts_it_with_the_blur_mapper()
+    {
+        var frame = SyntheticFrame();
+        Store().Save(new LightingProfileSet
+        {
+            Profiles = [new("Blur", new LightingState { EffectId = EffectIds.ScreenSyncBlur, BaseEffectId = 2 })],
+            Active = "Blur",
+        });
+
+        var vm = Create();
+        await SettleAsync(vm);
+
+        Assert.Equal(1, _sync.Starts);
+        AssertSameMap(BlurMapper.Map(frame), _sync.LastMapper!(frame));
+    }
+
     [Fact]
     public async Task On_bluetooth_it_waits_for_the_cable()
     {
