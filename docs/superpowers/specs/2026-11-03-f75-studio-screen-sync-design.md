@@ -69,3 +69,12 @@ Out of scope: NZXT CAM sync (parked), multi-monitor selection (the PC has one di
 - `KeyboardViewModel`: selecting Screen sync on cable starts the engine; on Bluetooth shows the cable message and doesn't start; switching away stops it and force-applies the base effect; profile save/load round-trips `BaseEffectId`.
 - `AulaF75Device` live path with the fake probe/channel: identity check at start, frames only while live, stored apply stops live first, never runs on Bluetooth.
 - Manual hardware checks (supervised): smoothness/latency, exclusive-fullscreen game, whether effect 21 is required, keyboard returns to the base effect after stop, no flash writes while streaming (only `0x08` frames on the wire).
+
+## Addendum (2026-11-03): Screen sync (blur)
+
+Approved follow-up. A second live effect that shows a blurred, spatial copy of the **whole** screen.
+
+- New app-side effect id **101** (`EffectIds.ScreenSyncBlur`), name "Screen sync (blur)", `IsLive = true`, `HasBrightness = true`, listed right after "Screen sync (edges)". Same rules as edges: USB cable only, volatile `0x08` frames only, base effect stored, never written to the settings page.
+- **BlurMapper**: each key's rectangle, normalised to the keyboard extent (same `KbLeft/KbRight/KbTop/KbBottom` as `EdgeMapper`), is mapped onto the whole frame and grown on every side by **60 % of the key's own normalised width (x) and height (y)** (`BlurMapper.Margin = 0.6`), clamped to the frame. Key colour = average of that region (at least 1 pixel). Overlapping regions give the blur.
+- The engine takes the mapper as a parameter of `StartAsync`; the view model passes a function that picks `EdgeMapper.Map` or `BlurMapper.Map` from the currently selected live effect (read via a volatile field). Switching between the two live effects while running changes the mapper on the next frame: no stop/restart, no stored write.
+- Every place that tested `EffectId == EffectIds.ScreenSync` now tests "is a live effect" (`F75Effects.Get(id).IsLive`).
