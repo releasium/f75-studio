@@ -334,7 +334,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     partial void OnSelectedEffectChanged(EffectDefinition value)
     {
         if (!value.IsLive) _baseEffectId = value.Id;
-        Volatile.Write(ref _liveEffectId, value.Id);
+        else Volatile.Write(ref _liveEffectId, value.Id); // keep the last live id so a stopping engine doesn't flash the other mapper
         _faulted = false; // choosing an effect (or loading a profile) allows screen sync to start again
         OnPropertyChanged(nameof(ShowSpeed));
         OnPropertyChanged(nameof(ShowBrightness));
