@@ -118,6 +118,7 @@ public sealed class ScreenSyncEngine : IScreenSync
         Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>> mapper, CancellationToken ct)
     {
         IReadOnlyDictionary<int, Rgb>? lastTarget = null;
+        CapturedFrame? lastFrame = null;
         Dictionary<int, double[]>? smoothed = null;
         Dictionary<int, Rgb>? lastSent = null;
         var lastSendAt = long.MinValue;
@@ -148,9 +149,12 @@ public sealed class ScreenSyncEngine : IScreenSync
                         }
                     }
                     var frame = capture.TryCapture(_timing.FramePeriodMs);
-                    if (frame is not null)
+                    if (frame is not null) lastFrame = frame;
+                    // Re-map every tick (not only on new frames) so a mapper switch shows up on a static screen.
+                    // While paused only a real new frame resumes; until then the dimmed last good image stays.
+                    if (lastFrame is not null && (frame is not null || !paused))
                     {
-                        target = mapper(frame);
+                        target = mapper(lastFrame);
                         lastTarget = target;
                         if (paused)
                         {
@@ -161,6 +165,7 @@ public sealed class ScreenSyncEngine : IScreenSync
                 }
                 catch (Exception ex) when (ex is ScreenCaptureException or ArgumentException)
                 {
+                    lastFrame = null;
                     if (!paused)
                     {
                         paused = true;

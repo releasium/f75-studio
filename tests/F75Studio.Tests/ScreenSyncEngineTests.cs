@@ -112,6 +112,25 @@ public class ScreenSyncEngineTests
     }
 
     [Fact]
+    public async Task A_mapper_switch_shows_up_on_a_static_screen_without_new_captures()
+    {
+        var h = new Harness();
+        var green = new Rgb(0, 255, 0);
+        var useBlue = 0;
+        IReadOnlyDictionary<int, Rgb> Map(CapturedFrame _) =>
+            F75Layout.Keys.ToDictionary(k => k.Led, _ => Volatile.Read(ref useBlue) == 1 ? Blue : green);
+        h.Captures.Enqueue(Solid(Red)); // then only null captures
+        await h.Engine.StartAsync(() => 9, Map);
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Count >= 1);
+
+        Volatile.Write(ref useBlue, 1);
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Any(f => f[EscLed].B > 200));
+        await h.Engine.StopAsync();
+
+        Assert.Equal(1, h.Device.LiveStarts);
+    }
+
+    [Fact]
     public async Task Smoothing_moves_35_percent_per_frame()
     {
         var h = new Harness();

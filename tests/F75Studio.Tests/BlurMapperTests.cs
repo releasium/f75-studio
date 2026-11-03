@@ -46,8 +46,8 @@ public class BlurMapperTests
         Assert.Equal(Red, map[Led("CapsLock")]);
         Assert.Equal(Blue, map[Led("PgUp")]);
         Assert.Equal(Blue, map[Led("Right")]);
-        Assert.True(map[Led("J")].R > 0);
-        Assert.True(map[Led("J")].B > 0);
+        Assert.InRange(map[Led("J")].R, 1, 254);
+        Assert.InRange(map[Led("J")].B, 1, 254);
     }
 
     [Fact]

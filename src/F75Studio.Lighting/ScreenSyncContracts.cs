@@ -45,7 +45,7 @@ public interface IScreenSync
     event Action<string?>? CaptureStatusChanged;
 
     /// <param name="brightness">Called on the engine's background thread every frame; it must be thread-safe.</param>
-    /// <param name="mapper">Maps each captured frame to key colours, called every captured frame (may switch result between frames); null means <see cref="EdgeMapper.Map"/>.</param>
+    /// <param name="mapper">Maps a captured frame to key colours; called on every engine tick (on the last frame when nothing new was captured), so it may switch result between ticks; null means <see cref="EdgeMapper.Map"/>.</param>
     Task StartAsync(Func<int> brightness, Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>>? mapper = null, CancellationToken ct = default);
     Task StopAsync();
 }
