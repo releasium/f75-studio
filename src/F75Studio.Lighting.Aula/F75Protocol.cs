@@ -37,11 +37,29 @@ public static class F75Protocol
         [0x03, 0x00, 0x00, 0x00, 0x01, 0x91], // AULA F75 KR
     ];
 
+    /// <summary>
+    /// Builds a 520-byte feature report. Reads carry no payload. Writes must carry exactly
+    /// <paramref name="length"/> bytes, and settings/colour-table writes must carry their 5A A5 marker.
+    /// </summary>
     public static byte[] Frame(byte cmd, byte param, int length, ReadOnlySpan<byte> payload = default)
     {
         if (!Allowed.Contains((cmd, param, length)))
             throw new InvalidOperationException($"Blocked F75 command 0x{cmd:X2} (param {param}, length {length}).");
-        if (payload.Length > length) throw new ArgumentException("Payload is longer than the declared length.", nameof(payload));
+
+        if ((cmd & ReadFlag) != 0)
+        {
+            if (payload.Length != 0)
+                throw new InvalidOperationException($"Read request 0x{cmd:X2} must not carry a payload.");
+        }
+        else
+        {
+            if (payload.Length != length)
+                throw new InvalidOperationException($"Write 0x{cmd:X2} must carry exactly {length} payload bytes (got {payload.Length}).");
+            if (cmd == CmdSettings && !HasMarker(payload, SettingsMarkerOffset))
+                throw new InvalidOperationException("Refusing to write a settings page without its 5A A5 marker.");
+            if (cmd == CmdColorTable && !HasMarker(payload, ColorTableMarkerOffset))
+                throw new InvalidOperationException("Refusing to write a colour table without its 5A A5 marker.");
+        }
 
         var frame = new byte[FrameLength];
         frame[0] = ReportId;
@@ -56,10 +74,12 @@ public static class F75Protocol
 
     public static byte[] ReadRequest(byte writeCmd, byte param, int length) => Frame((byte)(writeCmd | ReadFlag), param, length);
 
-    public static byte[] ReplyPayload(byte[] reply, byte expectedCmd, int length)
+    /// <summary>Returns the payload of <paramref name="reply"/> after checking its header against <paramref name="request"/>.</summary>
+    public static byte[] ReplyPayload(byte[] reply, byte[] request, int length)
     {
-        if (reply.Length < HeaderLength + length || reply[0] != ReportId || reply[1] != expectedCmd)
-            throw new F75ProtocolException($"Unexpected reply from the keyboard (expected command 0x{expectedCmd:X2}).");
+        if (reply.Length < HeaderLength + length
+            || !reply.AsSpan(0, HeaderLength).SequenceEqual(request.AsSpan(0, HeaderLength)))
+            throw new F75ProtocolException($"Unexpected reply from the keyboard (expected header {Convert.ToHexString(request, 0, HeaderLength)}).");
         return reply.AsSpan(HeaderLength, length).ToArray();
     }
 
@@ -71,7 +91,7 @@ public static class F75Protocol
     }
 
     public static bool HasMarker(ReadOnlySpan<byte> region, int offset) =>
-        region.Length >= offset + 2 && region[offset] == 0x5A && region[offset + 1] == 0xA5;
+        offset >= 0 && region.Length >= offset + 2 && region[offset] == 0x5A && region[offset + 1] == 0xA5;
 
     /// <summary>Settings-page slot of an effect (protocol doc §4).</summary>
     public static int SlotFor(int effectId) => effectId switch
@@ -113,7 +133,8 @@ public static class F75Protocol
     {
         if (table.Length != ColorTableLength || !HasMarker(table, ColorTableMarkerOffset))
             throw new F75ProtocolException("The keyboard's colour table is missing its 5A A5 marker.");
-        if (effectId is < 1 or > 18) throw new ArgumentOutOfRangeException(nameof(effectId), effectId, "Effect has no colour row.");
+        if (!F75Effects.IsSupported(effectId) || !F75Effects.Get(effectId).HasColor)
+            throw new ArgumentOutOfRangeException(nameof(effectId), effectId, "Effect has no colour row.");
         var t = table.ToArray();
         var offset = effectId * 21;
         t[offset] = color.R;

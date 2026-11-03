@@ -39,10 +39,10 @@ public class F75ProtocolTests
     {
         Assert.Equal("0682010001000600", Header(F75Protocol.ReadRequest(F75Protocol.CmdIdentity, 1, 6)));
         Assert.Equal("0684000001008000", Header(F75Protocol.ReadRequest(F75Protocol.CmdSettings, 0, 128)));
-        Assert.Equal("0604000001008000", Header(F75Protocol.Frame(F75Protocol.CmdSettings, 0, 128, new byte[128])));
-        Assert.Equal("060A000001000002", Header(F75Protocol.Frame(F75Protocol.CmdColorTable, 0, 512, new byte[512])));
+        Assert.Equal("0604000001008000", Header(F75Protocol.Frame(F75Protocol.CmdSettings, 0, 128, FixedOnPage())));
+        Assert.Equal("060A000001000002", Header(F75Protocol.Frame(F75Protocol.CmdColorTable, 0, 512, ColorTable())));
         Assert.Equal("0606000001007A01", Header(F75Protocol.Frame(F75Protocol.CmdPerKey, 0, 378, new byte[378])));
-        Assert.Equal(520, F75Protocol.Frame(F75Protocol.CmdSettings, 0, 128, new byte[128]).Length);
+        Assert.Equal(520, F75Protocol.Frame(F75Protocol.CmdSettings, 0, 128, FixedOnPage()).Length);
     }
 
     [Theory]
@@ -56,6 +56,36 @@ public class F75ProtocolTests
         Assert.Throws<InvalidOperationException>(() => F75Protocol.Frame(cmd, param, length));
 
     [Fact]
+    public void Markerless_settings_write_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() => F75Protocol.Frame(F75Protocol.CmdSettings, 0, 128, new byte[128]));
+    }
+
+    [Fact]
+    public void Markerless_colour_table_write_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() => F75Protocol.Frame(F75Protocol.CmdColorTable, 0, 512, new byte[512]));
+    }
+
+    [Fact]
+    public void Short_write_payload_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() => F75Protocol.Frame(F75Protocol.CmdPerKey, 0, 378, new byte[100]));
+    }
+
+    [Fact]
+    public void Oversized_write_payload_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() => F75Protocol.Frame(F75Protocol.CmdPerKey, 0, 378, new byte[379]));
+    }
+
+    [Fact]
+    public void Read_request_with_a_payload_is_refused()
+    {
+        Assert.Throws<InvalidOperationException>(() => F75Protocol.Frame((byte)(F75Protocol.CmdSettings | F75Protocol.ReadFlag), 0, 128, new byte[128]));
+    }
+
+    [Fact]
     public void Identity_accepts_only_known_f75_models()
     {
         Assert.True(F75Protocol.IsKnownIdentity([3, 0, 0, 0, 0, 0xCD]));
@@ -66,14 +96,28 @@ public class F75ProtocolTests
     }
 
     [Fact]
-    public void Reply_payload_requires_the_echoed_command()
+    public void Reply_payload_requires_the_echoed_header()
     {
+        var request = F75Protocol.ReadRequest(F75Protocol.CmdSettings, 0, 128);
         var reply = new byte[520];
-        reply[0] = 0x06;
-        reply[1] = 0x84;
+        request.AsSpan(0, 8).CopyTo(reply);
         reply[8] = 0xAB;
-        Assert.Equal(0xAB, F75Protocol.ReplyPayload(reply, 0x84, 128)[0]);
-        Assert.Throws<F75ProtocolException>(() => F75Protocol.ReplyPayload(reply, 0x8A, 512));
+
+        Assert.Equal(0xAB, F75Protocol.ReplyPayload(reply, request, 128)[0]);
+        Assert.Throws<F75ProtocolException>(() =>
+            F75Protocol.ReplyPayload(reply, F75Protocol.ReadRequest(F75Protocol.CmdColorTable, 0, 512), 512));
+    }
+
+    [Fact]
+    public void Reply_with_different_length_bytes_is_refused()
+    {
+        var request = F75Protocol.ReadRequest(F75Protocol.CmdSettings, 0, 128);
+        var reply = new byte[520];
+        request.AsSpan(0, 8).CopyTo(reply);
+        reply[6] = 0x00;
+        reply[7] = 0x01; // 256 bytes instead of 128
+
+        Assert.Throws<F75ProtocolException>(() => F75Protocol.ReplyPayload(reply, request, 128));
     }
 
     [Fact]
@@ -107,6 +151,14 @@ public class F75ProtocolTests
     }
 
     [Fact]
+    public void Effect_17_writes_slot_16_at_0x5A_and_0x5B()
+    {
+        var page = F75Protocol.PatchSettings(FixedOnPage(), new LightingState { EffectId = 17, Brightness = 4, Speed = 2 });
+        Assert.Equal(4, page[0x5A]);
+        Assert.Equal(0x27, page[0x5B]); // speed 2, slot nibble 7 kept (Blossoming has no colour)
+    }
+
+    [Fact]
     public void Static_keeps_the_stored_speed()
     {
         var page = F75Protocol.PatchSettings(FixedOnPage(), new LightingState { EffectId = 1, Brightness = 3, Speed = 0 });
@@ -125,6 +177,15 @@ public class F75ProtocolTests
         Assert.Equal(0x20, page[0x0B]);
         Assert.Equal(6, page[0x5E]);
         Assert.Equal(original[0x5F], page[0x5F]);
+    }
+
+    [Fact]
+    public void Per_key_patch_changes_exactly_the_mode_bytes_and_slot_18_brightness()
+    {
+        var original = FixedOnPage();
+        var page = F75Protocol.PatchSettings(original, new LightingState { EffectId = EffectIds.PerKey, Brightness = 6 });
+        var changed = Enumerable.Range(0, 128).Where(i => page[i] != original[i]).ToArray();
+        Assert.Equal(new[] { 0x09, 0x0A, 0x5E }, changed);
     }
 
     [Fact]
@@ -153,6 +214,16 @@ public class F75ProtocolTests
         Assert.Throws<F75ProtocolException>(() => F75Protocol.PatchColorTable(new byte[512], 2, Rgb.White));
     }
 
+    [Theory]
+    [InlineData(3)]   // Rainbow: no colour
+    [InlineData(9)]   // hidden by the official driver, not in the catalogue
+    [InlineData(0)]   // Off
+    [InlineData(21)]  // per-key has no colour row
+    public void Colour_table_refuses_effects_without_a_colour_row(int effectId)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => F75Protocol.PatchColorTable(ColorTable(), effectId, Rgb.White));
+    }
+
     [Fact]
     public void Per_key_is_planar_by_led_index()
     {
@@ -169,5 +240,13 @@ public class F75ProtocolTests
         Assert.Equal(255, data[126 + 9]);
         Assert.Equal(255, data[252 + 89]);
         Assert.Equal(3 * 255, data.Sum(b => b));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(-2)]
+    public void Marker_check_refuses_negative_offsets(int offset)
+    {
+        Assert.False(F75Protocol.HasMarker(new byte[] { 0x5A, 0xA5, 0x5A, 0xA5 }, offset));
     }
 }
