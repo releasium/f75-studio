@@ -26,7 +26,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private string? _activeProfileName;
     private LightingState? _lastApplied;
     private bool _forcePending;
-    private int _applySeq;
+    private int _deviceSeq;
     private string? _lastSaveError;
 
     [ObservableProperty] private EffectDefinition _selectedEffect = F75Effects.Get(EffectIds.FixedOn);
@@ -210,17 +210,30 @@ public sealed partial class KeyboardViewModel : ObservableObject
         var index = _profiles.FindIndex(p => p.Name == _activeProfileName);
         if (index < 0) return;
         _profiles.RemoveAt(index);
+        var next = _profiles[0];
+        _activeProfileName = next.Name;
         _loading = true;
         try
         {
             ProfileNames.RemoveAt(index);
+            SelectedProfile = next.Name;
+            ProfileNameEdit = next.Name;
         }
         finally
         {
             _loading = false;
         }
-        SelectedProfile = _profiles[0].Name;
+        Load(next.State);
         Save();
+        ScheduleApply(force: true);
+    }
+
+    /// <summary>Cancels the pending debounce and saves the current state now (call on exit). Starts no new device write.</summary>
+    public Task FlushAsync()
+    {
+        _pendingCts?.Cancel();
+        Save();
+        return Task.CompletedTask;
     }
 
     partial void OnSelectedProfileChanged(string? value)
@@ -257,12 +270,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
             try { ColorHex = value.ToHex(); }
             finally { _syncingColor = false; }
         }
-        if (!_syncingHue && TryGetHue(value, out var hue))
-        {
-            _syncingHue = true;
-            try { Hue = hue; }
-            finally { _syncingHue = false; }
-        }
+        if (!_syncingHue) SyncHueFrom(value);
         OnStateChanged();
     }
 
@@ -313,6 +321,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
             Brightness = s.Brightness;
             Speed = s.Speed;
             Color = s.Color;
+            SyncHueFrom(s.Color); // Color may be unchanged (no notification), so sync explicitly
             Colorful = s.Colorful;
             _keyColors = new Dictionary<int, Rgb>(s.KeyColors);
         }
@@ -321,6 +330,14 @@ public sealed partial class KeyboardViewModel : ObservableObject
             _loading = false;
         }
         RefreshPreview();
+    }
+
+    private void SyncHueFrom(Rgb color)
+    {
+        if (!TryGetHue(color, out var hue)) return;
+        _syncingHue = true;
+        try { Hue = hue; }
+        finally { _syncingHue = false; }
     }
 
     private static bool TryGetHue(Rgb c, out double hue)
@@ -383,15 +400,15 @@ public sealed partial class KeyboardViewModel : ObservableObject
         var cts = new CancellationTokenSource();
         _pendingCts = cts;
         if (force) _forcePending = true;
-        var seq = ++_applySeq;
-        PendingApply = ApplyAfterDebounceAsync(CurrentState, seq, cts.Token);
+        PendingApply = ApplyAfterDebounceAsync(CurrentState, cts.Token);
     }
 
-    private async Task ApplyAfterDebounceAsync(LightingState state, int seq, CancellationToken ct)
+    private async Task ApplyAfterDebounceAsync(LightingState state, CancellationToken ct)
     {
+        var mine = -1;
         void Report(string message, InfoBarSeverity severity)
         {
-            if (seq == _applySeq) SetStatus(message, severity);
+            if (mine == -1 || mine == _deviceSeq) SetStatus(message, severity);
         }
 
         try
@@ -402,8 +419,10 @@ public sealed partial class KeyboardViewModel : ObservableObject
             Save();
             if (!_forcePending && _lastApplied is { } last && WireEqual(last, state)) return;
             _forcePending = false;
+            mine = ++_deviceSeq;
+            _lastApplied = null; // unknown until the write finishes, so a revert during the write is not skipped
             await _device.ApplyAsync(state, CancellationToken.None);
-            _lastApplied = state;
+            if (mine == _deviceSeq) _lastApplied = state;
             if (_lastSaveError is { } saveError) Report(saveError, InfoBarSeverity.Error);
             else Report("Applied to keyboard.", InfoBarSeverity.Success);
         }

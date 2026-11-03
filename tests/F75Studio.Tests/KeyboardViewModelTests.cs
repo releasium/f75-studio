@@ -337,4 +337,136 @@ public class KeyboardViewModelTests : IDisposable
         vm.Color = new Rgb(128, 128, 128); // grey keeps the hue
         Assert.Equal(120, vm.Hue, 1);
     }
+
+    private sealed class GatedDevice : IKeyboardDevice
+    {
+        public DeviceStatus Status => DeviceStatus.Connected;
+        public string StatusText => "gated";
+        public List<LightingState> Applied { get; } = [];
+        public TaskCompletionSource? Gate { get; set; }
+#pragma warning disable CS0067
+        public event EventHandler? StatusChanged;
+#pragma warning restore CS0067
+
+        public Task ApplyAsync(LightingState state, CancellationToken ct = default)
+        {
+            Applied.Add(state);
+            return Gate?.Task ?? Task.CompletedTask;
+        }
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task Reverting_during_an_in_flight_write_is_still_applied()
+    {
+        var gated = new GatedDevice();
+        var vm = new KeyboardViewModel(gated, Store(), _ => Task.CompletedTask);
+        await vm.PendingApply;
+
+        gated.Gate = new TaskCompletionSource();
+        vm.Brightness = 3;
+        var first = vm.PendingApply;
+        vm.Brightness = 9; // back to the previous value while the write for 3 is blocked
+        var second = vm.PendingApply;
+        gated.Gate.SetResult();
+        await Task.WhenAll(first, second);
+
+        Assert.Equal(9, gated.Applied[^1].Brightness);
+    }
+
+    [Fact]
+    public void Hue_matches_the_default_colour_on_a_fresh_view_model()
+    {
+        var vm = Create();
+        Assert.InRange(vm.Hue, 211, 213);
+    }
+
+    [Fact]
+    public async Task Flush_saves_now_without_starting_a_device_write()
+    {
+        var gate = new TaskCompletionSource();
+        var vm = new KeyboardViewModel(_device, Store(), _ => gate.Task);
+        vm.Brightness = 3;
+
+        await vm.FlushAsync();
+        Assert.Equal(3, Store().Load().Profiles.Single().State.Brightness);
+
+        gate.SetResult();
+        await vm.PendingApply;
+        Assert.Empty(_device.Applied);
+    }
+
+    [Fact]
+    public async Task Forced_triggers_apply_an_identical_state()
+    {
+        var vm = Create();
+        await vm.PendingApply;
+        var n = _device.Applied.Count;
+
+        Assert.True(vm.ApplyProfileByName("default"));
+        await vm.PendingApply;
+        Assert.Equal(n + 1, _device.Applied.Count);
+
+        _device.SetStatus(DeviceStatus.Connected, "Connected by USB cable");
+        await vm.PendingApply;
+        Assert.Equal(n + 2, _device.Applied.Count);
+    }
+
+    [Fact]
+    public async Task Same_state_is_retried_after_a_failed_apply()
+    {
+        _device.FailWith = new KeyboardUnavailableException("Bluetooth.");
+        var vm = Create();
+        await vm.PendingApply;
+        Assert.Empty(_device.Applied);
+
+        _device.FailWith = null;
+        vm.Speed = 4; // no effect on the wire for Static, but the last apply failed
+        await vm.PendingApply;
+
+        Assert.Single(_device.Applied);
+        Assert.Equal(InfoBarSeverity.Success, vm.StatusSeverity);
+    }
+
+    [Fact]
+    public async Task New_and_duplicate_names_are_unique_case_insensitively()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet
+        {
+            Profiles = [new("Default", new LightingState()), new("profile 1", new LightingState()), new("default copy", new LightingState())],
+            Active = "Default",
+        });
+        var vm = Create(store);
+        await vm.PendingApply;
+
+        vm.NewProfileCommand.Execute(null);
+        Assert.Equal("Profile 2", vm.SelectedProfile);
+
+        vm.SelectedProfile = "Default";
+        vm.DuplicateProfileCommand.Execute(null);
+        Assert.Equal("Default copy 2", vm.SelectedProfile);
+    }
+
+    [Fact]
+    public async Task Deleting_a_profile_loads_and_applies_the_first_remaining()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet
+        {
+            Profiles = [new("Default", new LightingState { Brightness = 2 }), new("Gaming", new LightingState { Brightness = 5 })],
+            Active = "Gaming",
+        });
+        var vm = Create(store);
+        await vm.PendingApply;
+
+        vm.DeleteProfileCommand.Execute(null);
+        await vm.PendingApply;
+
+        Assert.Equal("Default", vm.SelectedProfile);
+        Assert.Equal(2, vm.Brightness);
+        Assert.Equal(2, _device.Applied[^1].Brightness);
+        Assert.Equal("Default", Store().Load().Active);
+    }
 }
