@@ -18,6 +18,14 @@ public partial class KeyboardView : UserControl
         e.Handled = true;
     }
 
+    /// <summary>Only a user drag or key press may change the hue; load-time echoes and coercion are ignored.</summary>
+    private void OnHueSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (sender is not Slider slider || Vm is null) return;
+        if (!slider.IsMouseCaptureWithin && !slider.IsKeyboardFocused) return;
+        Vm.Hue = e.NewValue;
+    }
+
     private void OnKeyMouseEnter(object sender, MouseEventArgs e)
     {
         if (e.LeftButton != MouseButtonState.Pressed) return;

@@ -376,6 +376,17 @@ public class KeyboardViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Hue_echo_of_the_current_hue_does_not_change_the_colour()
+    {
+        var vm = Create();
+        var before = vm.Color;
+        vm.Hue = vm.Hue + 0.2; // a view echoing roughly the same value
+        Assert.Equal(before, vm.Color);
+        vm.Hue = 0; // a real change to red still works
+        Assert.Equal(new Rgb(255, 0, 0), vm.Color);
+    }
+
+    [Fact]
     public void Hue_matches_the_default_colour_on_a_fresh_view_model()
     {
         var vm = Create();

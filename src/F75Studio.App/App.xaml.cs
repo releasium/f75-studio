@@ -110,7 +110,11 @@ public partial class App : Application
     {
         if (args.Contains("--show")) ShowMainWindow();
         var index = Array.IndexOf(args, "--profile");
-        if (index >= 0 && index + 1 < args.Length) ApplyLightingProfile(args[index + 1]);
+        if (index < 0) return;
+        if (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            _tray?.Notify("Missing profile name", "Missing profile name after --profile");
+        else
+            ApplyLightingProfile(args[index + 1]);
     }
 
     private void ApplyLightingProfile(string name)

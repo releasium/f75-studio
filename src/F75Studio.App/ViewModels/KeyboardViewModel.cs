@@ -285,6 +285,8 @@ public sealed partial class KeyboardViewModel : ObservableObject
     partial void OnHueChanged(double value)
     {
         if (_loading || _syncingHue) return;
+        // A hue that matches the current colour's hue (e.g. a slider echoing its initial value) is not a user edit.
+        if (TryGetHue(Color, out var current) && Math.Abs(value - current) < 0.5) return;
         _syncingHue = true;
         try { Color = Rgb.FromHsv(value, 1, 1); }
         finally { _syncingHue = false; }

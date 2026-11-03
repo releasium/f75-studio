@@ -56,7 +56,7 @@ public sealed class TrayService : IDisposable
         foreach (var name in _lightingProfiles())
         {
             var profileName = name;
-            lighting.Items.Add(Item(profileName, () => _applyLightingProfile(profileName)));
+            lighting.Items.Add(Item(profileName.Replace("_", "__"),() => _applyLightingProfile(profileName)));
         }
         if (lighting.Items.Count == 0) lighting.Items.Add(new MenuItem { Header = "No profiles", IsEnabled = false });
         menu.Items.Add(lighting);
