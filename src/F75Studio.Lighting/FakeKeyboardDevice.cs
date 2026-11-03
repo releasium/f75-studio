@@ -13,8 +13,13 @@ public sealed class FakeKeyboardDevice : IKeyboardDevice, ILiveLighting
     public List<LightingState> Applied { get; } = [];
     public Exception? FailWith { get; set; }
 
-    /// <summary>Frames passed to <see cref="SendLiveAsync"/>; lock on this list when reading while streaming.</summary>
-    public List<IReadOnlyDictionary<int, Rgb>> LiveFrames { get; } = [];
+    private readonly List<IReadOnlyDictionary<int, Rgb>> _liveFrames = [];
+
+    /// <summary>Copy of the frames passed to <see cref="SendLiveAsync"/> so far; safe to call while streaming.</summary>
+    public IReadOnlyList<IReadOnlyDictionary<int, Rgb>> LiveFramesSnapshot()
+    {
+        lock (_liveLock) return _liveFrames.ToList();
+    }
     public Exception? LiveFailWith { get; set; }
     public bool IsLive => _isLive;
     public int LiveStarts => Volatile.Read(ref _liveStarts);
@@ -49,7 +54,7 @@ public sealed class FakeKeyboardDevice : IKeyboardDevice, ILiveLighting
     {
         if (LiveFailWith is { } failure) return Task.FromException(failure);
         if (!_isLive) return Task.FromException(new KeyboardUnavailableException("Screen sync isn't running."));
-        lock (_liveLock) LiveFrames.Add(new Dictionary<int, Rgb>(colors));
+        lock (_liveLock) _liveFrames.Add(new Dictionary<int, Rgb>(colors));
         return Task.CompletedTask;
     }
 

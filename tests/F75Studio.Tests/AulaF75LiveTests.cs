@@ -93,10 +93,95 @@ public class AulaF75LiveTests
         await fake.SendLiveAsync(new Dictionary<int, Rgb> { [0] = Rgb.White });
         await fake.StopLiveAsync();
         Assert.Equal(1, fake.LiveStarts);
-        Assert.Single(fake.LiveFrames);
+        Assert.Single(fake.LiveFramesSnapshot());
         Assert.Equal(1, fake.LiveStops);
 
         fake.SetStatus(DeviceStatus.Bluetooth, "Bluetooth");
         await Assert.ThrowsAsync<KeyboardUnavailableException>(() => fake.StartLiveAsync());
+    }
+
+    private static AulaF75Device CreateTracked(out FakeTrackedBoard board, out FakeProbe probe)
+    {
+        board = new FakeTrackedBoard();
+        probe = new FakeProbe { Boards = { board } };
+        var device = new AulaF75Device(probe, 0);
+        Assert.True(SpinWait.SpinUntil(() => !device.IsRefreshing, 5000));
+        Assert.Equal(DeviceStatus.Connected, device.Status);
+        return device;
+    }
+
+    [Fact]
+    public async Task Live_channel_is_open_while_live_and_closed_after_stop()
+    {
+        using var device = CreateTracked(out var board, out _);
+        await device.StartLiveAsync();
+        var live = board.Last;
+        Assert.False(live.Disposed);
+        await device.StopLiveAsync();
+        Assert.True(live.Disposed);
+    }
+
+    [Fact]
+    public async Task Live_channel_is_closed_by_a_stored_apply()
+    {
+        using var device = CreateTracked(out var board, out _);
+        await device.StartLiveAsync();
+        var live = board.Last;
+        await device.ApplyAsync(new LightingState { EffectId = 3, Brightness = 5 });
+        Assert.True(live.Disposed);
+        Assert.All(board.Opened, c => Assert.True(c.Disposed));
+    }
+
+    [Fact]
+    public async Task Live_channel_is_closed_after_a_send_failure()
+    {
+        using var device = CreateTracked(out var board, out _);
+        await device.StartLiveAsync();
+        var live = board.Last;
+        live.FailNextWriteSets = 2;
+        await Assert.ThrowsAsync<KeyboardUnavailableException>(() => device.SendLiveAsync(new Dictionary<int, Rgb> { [0] = Rgb.White }));
+        Assert.True(live.Disposed);
+    }
+
+    [Fact]
+    public async Task Live_channel_is_closed_when_the_status_leaves_connected()
+    {
+        using var device = CreateTracked(out var board, out var probe);
+        await device.StartLiveAsync();
+        var live = board.Last;
+
+        probe.Boards.Clear();
+        probe.RaiseChanged();
+
+        Assert.True(SpinWait.SpinUntil(() => !device.IsLive, 5000));
+        Assert.True(live.Disposed);
+    }
+
+    [Fact]
+    public async Task Live_channel_is_closed_by_dispose()
+    {
+        var device = CreateTracked(out var board, out _);
+        await device.StartLiveAsync();
+        var live = board.Last;
+        device.Dispose();
+        Assert.True(live.Disposed);
+        Assert.False(device.IsLive);
+    }
+
+    [Fact]
+    public async Task Refresh_while_live_opens_no_second_handle_and_sends_no_identity_read()
+    {
+        using var device = CreateTracked(out var board, out _);
+        await device.StartLiveAsync();
+        var openedBefore = board.Opened.Count;
+        var live = board.Last;
+        live.Sent.Clear();
+
+        await device.RefreshAsync();
+
+        Assert.True(device.IsLive);
+        Assert.Equal(DeviceStatus.Connected, device.Status);
+        Assert.Equal(openedBefore, board.Opened.Count);
+        Assert.DoesNotContain(live.Sent, f => f[1] == 0x82);
     }
 }

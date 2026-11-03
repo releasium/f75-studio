@@ -272,6 +272,7 @@ public sealed class AulaF75Device : IKeyboardDevice, ILiveLighting
         // Let a transaction that is already on the wire finish (a half-applied sequence would leave the keyboard
         // inconsistent), but never hang the exit: give up after 3 s. A blocking wait is fine because all HID I/O
         // runs off the UI thread (ConfigureAwait(false) here, Task.Run in the view model).
+        // If the wait times out, a live channel (if any) stays open until process exit: best effort.
         if (_gate.Wait(DisposeWaitMs))
         {
             try
@@ -330,6 +331,8 @@ public sealed class AulaF75Device : IKeyboardDevice, ILiveLighting
         {
             // The official driver talks to the same collection; don't fight it (and send nothing, not even a read).
             if (_probe.OfficialAppRunning()) return (DeviceStatus.Error, OfficialAppRunningText);
+            // A live session already proved the identity on its open channel; don't open a second handle or send a read mid-stream.
+            if (_isLive) return (DeviceStatus.Connected, "Connected by USB cable");
             Exception? firstError = null;
             byte[]? unknownIdentity = null;
             foreach (var board in boards)

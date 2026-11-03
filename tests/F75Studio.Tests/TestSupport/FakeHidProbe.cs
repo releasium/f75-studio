@@ -81,3 +81,24 @@ internal sealed class FakeChannelBoard(FakeFeatureChannel channel) : IWiredBoard
 {
     public IFeatureChannel Open() => channel;
 }
+
+/// <summary>A board that returns a NEW channel per Open() and records every channel, to detect leaked handles.</summary>
+internal sealed class FakeTrackedBoard : IWiredBoard
+{
+    private readonly object _lock = new();
+    private readonly List<FakeFeatureChannel> _opened = [];
+
+    public IReadOnlyList<FakeFeatureChannel> Opened
+    {
+        get { lock (_lock) return _opened.ToList(); }
+    }
+
+    public FakeFeatureChannel Last => Opened[^1];
+
+    public IFeatureChannel Open()
+    {
+        var channel = new FakeFeatureChannel();
+        lock (_lock) _opened.Add(channel);
+        return channel;
+    }
+}
