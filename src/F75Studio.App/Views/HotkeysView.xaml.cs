@@ -9,7 +9,15 @@ namespace F75Studio.App.Views;
 
 public partial class HotkeysView : UserControl
 {
-    public HotkeysView() => InitializeComponent();
+    public HotkeysView()
+    {
+        InitializeComponent();
+        Unloaded += (_, _) => (DataContext as HotkeysViewModel)?.CancelRecording();
+        LostKeyboardFocus += (_, _) =>
+        {
+            if (!IsKeyboardFocusWithin) (DataContext as HotkeysViewModel)?.CancelRecording();
+        };
+    }
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {

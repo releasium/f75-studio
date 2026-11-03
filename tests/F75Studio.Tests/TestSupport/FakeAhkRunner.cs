@@ -8,6 +8,7 @@ public sealed class FakeAhkRunner : IAhkRunner
 
     public string? AhkExePath { get; set; } = @"C:\fake\AutoHotkey64.exe";
     public AhkValidationResult NextValidation { get; set; } = AhkValidationResult.Ok;
+    public Exception? ValidateException { get; set; }
     public List<string> Started { get; } = [];
     public List<string> Stopped { get; } = [];
     public List<string> Validated { get; } = [];
@@ -19,6 +20,7 @@ public sealed class FakeAhkRunner : IAhkRunner
     {
         if (AhkExePath is null) throw new AhkNotFoundException();
         Validated.Add(scriptPath);
+        if (ValidateException is not null) throw ValidateException;
         return Task.FromResult(NextValidation);
     }
 

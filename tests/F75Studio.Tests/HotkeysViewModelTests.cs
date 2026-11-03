@@ -176,4 +176,87 @@ public class HotkeysViewModelTests : IDisposable
         Assert.Single(vm.Items);
         Assert.Same(vm.Items[0], vm.SelectedItem);
     }
+
+    [Fact]
+    public async Task Runner_exception_leaves_no_pending_file_and_keeps_existing_script()
+    {
+        var services = CreateServices();
+        var script = services.Paths.GeneratedHotkeysScript;
+        Directory.CreateDirectory(Path.GetDirectoryName(script)!);
+        File.WriteAllText(script, "; old script");
+        var before = File.ReadAllBytes(script);
+        _runner.ValidateException = new InvalidOperationException("boom");
+        var vm = new HotkeysViewModel(services);
+        vm.AddHotkeyCommand.Execute(null);
+        vm.SelectedItem!.Trigger = "^k";
+
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        Assert.False(File.Exists(Path.ChangeExtension(script, ".pending.ahk")));
+        Assert.Equal(before, File.ReadAllBytes(script));
+        Assert.Equal(InfoBarSeverity.Error, vm.StatusSeverity);
+        Assert.Contains("boom", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Rejected_apply_keeps_existing_script()
+    {
+        var services = CreateServices();
+        var script = services.Paths.GeneratedHotkeysScript;
+        Directory.CreateDirectory(Path.GetDirectoryName(script)!);
+        File.WriteAllText(script, "; old script");
+        var before = File.ReadAllBytes(script);
+        _runner.NextValidation = new AhkValidationResult(false, "bad", 1);
+        var vm = new HotkeysViewModel(services);
+        vm.AddHotkeyCommand.Execute(null);
+        vm.SelectedItem!.Trigger = "^k";
+
+        await vm.ApplyCommand.ExecuteAsync(null);
+
+        Assert.Equal(before, File.ReadAllBytes(script));
+        Assert.False(File.Exists(Path.ChangeExtension(script, ".pending.ahk")));
+    }
+
+    [Fact]
+    public void Changing_selection_while_recording_cancels_and_resumes_script()
+    {
+        var services = CreateServices();
+        var vm = new HotkeysViewModel(services);
+        vm.AddHotkeyCommand.Execute(null);
+        vm.AddHotkeyCommand.Execute(null);
+        _runner.Start(services.Paths.GeneratedHotkeysScript);
+        vm.ToggleRecordingCommand.Execute(null);
+
+        vm.SelectedItem = vm.Items[0];
+
+        Assert.False(vm.IsRecording);
+        Assert.True(_runner.IsRunning(services.Paths.GeneratedHotkeysScript));
+    }
+
+    [Fact]
+    public void Delete_while_recording_cancels_and_resumes_script()
+    {
+        var services = CreateServices();
+        var vm = new HotkeysViewModel(services);
+        vm.AddHotkeyCommand.Execute(null);
+        _runner.Start(services.Paths.GeneratedHotkeysScript);
+        vm.ToggleRecordingCommand.Execute(null);
+
+        vm.DeleteCommand.Execute(null);
+
+        Assert.False(vm.IsRecording);
+        Assert.True(_runner.IsRunning(services.Paths.GeneratedHotkeysScript));
+    }
+
+    [Fact]
+    public void Editing_an_item_clears_its_error()
+    {
+        var vm = new HotkeysViewModel(CreateServices());
+        vm.AddHotkeyCommand.Execute(null);
+        vm.SelectedItem!.Error = "bad";
+
+        vm.SelectedItem.Keys = "x";
+
+        Assert.Null(vm.SelectedItem.Error);
+    }
 }

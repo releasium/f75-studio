@@ -137,7 +137,9 @@
                                 <TextBlock Text="Keys to send (AHK Send syntax)" Style="{StaticResource FieldLabel}" />
                                 <ui:TextBox Text="{Binding Keys, UpdateSourceTrigger=PropertyChanged}" FontFamily="Cascadia Mono, Consolas"
                                             PlaceholderText="e.g. ^{Left} or {Home}" />
-                                <CheckBox Content="Blind mode (keeps held modifiers working)" IsChecked="{Binding Blind}" Margin="0,8,0,0" />
+                                <CheckBox IsChecked="{Binding Blind}" Margin="0,8,0,0">
+                                    <TextBlock Text="Blind mode (keeps held modifiers working)" TextWrapping="Wrap" />
+                                </CheckBox>
                             </StackPanel>
 
                             <StackPanel Visibility="{Binding Kind, Converter={StaticResource EnumMatch}, ConverterParameter=Remap}">
@@ -194,7 +196,8 @@
                 <TextBlock DockPanel.Dock="Top" Text="Generated AutoHotkey v2" Style="{StaticResource FieldLabel}" />
                 <ui:TextBox Text="{Binding Preview, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" TextWrapping="NoWrap"
                             FontFamily="Cascadia Mono, Consolas" FontSize="12" VerticalContentAlignment="Top"
-                            VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+                            VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.HorizontalScrollBarVisibility="Auto" />
             </DockPanel>
         </Grid>
     </Grid>

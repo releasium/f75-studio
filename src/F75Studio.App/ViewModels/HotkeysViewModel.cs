@@ -15,6 +15,7 @@ public sealed partial class HotkeysViewModel : ObservableObject
     private readonly string _scriptPath;
     private TriggerRecorder? _recorder;
     private bool _resumeAfterRecording;
+    private int _editCount;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(DeleteCommand), nameof(ToggleRecordingCommand))]
@@ -32,11 +33,13 @@ public sealed partial class HotkeysViewModel : ObservableObject
         _services = services;
         _scriptPath = services.Paths.GeneratedHotkeysScript;
         foreach (var hotkey in services.HotkeyStore.Load()) AddItem(HotkeyItemViewModel.FromHotkey(hotkey));
-        Items.CollectionChanged += (_, _) => { IsDirty = true; RefreshPreview(); };
+        Items.CollectionChanged += (_, _) => { _editCount++; IsDirty = true; RefreshPreview(); };
         SelectedItem = Items.FirstOrDefault();
         RefreshPreview();
         IsDirty = false;
     }
+
+    partial void OnSelectedItemChanged(HotkeyItemViewModel? value) => CancelRecording();
 
     public ObservableCollection<HotkeyItemViewModel> Items { get; } = [];
 
@@ -51,6 +54,7 @@ public sealed partial class HotkeysViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(HasSelection))]
     private void Delete()
     {
+        CancelRecording();
         var index = Items.IndexOf(SelectedItem!);
         Items.RemoveAt(index);
         SelectedItem = Items.Count == 0 ? null : Items[Math.Min(index, Items.Count - 1)];
@@ -66,6 +70,7 @@ public sealed partial class HotkeysViewModel : ObservableObject
     [RelayCommand]
     private async Task ApplyAsync()
     {
+        CancelRecording();
         foreach (var item in Items) item.Error = null;
         var missing = Items.Where(i => string.IsNullOrWhiteSpace(i.Trigger)).ToList();
         if (missing.Count > 0)
@@ -76,18 +81,18 @@ public sealed partial class HotkeysViewModel : ObservableObject
             return;
         }
 
+        var editsAtStart = _editCount;
         var hotkeys = Items.Select(i => i.ToHotkey()).ToList();
-        _services.HotkeyStore.Save(hotkeys);
-        var script = _services.Generator.Generate(hotkeys);
         var pending = Path.ChangeExtension(_scriptPath, ".pending.ahk");
-        ScriptFile.Write(pending, script.Text);
-
         try
         {
+            _services.HotkeyStore.Save(hotkeys);
+            var script = _services.Generator.Generate(hotkeys);
+            ScriptFile.Write(pending, script.Text);
+
             var result = await _services.Runner.ValidateAsync(pending);
             if (!result.Success)
             {
-                File.Delete(pending);
                 var owner = result.Line is int line && script.LineOwners.TryGetValue(line, out var id)
                     ? Items.FirstOrDefault(i => i.Id == id)
                     : null;
@@ -102,14 +107,28 @@ public sealed partial class HotkeysViewModel : ObservableObject
 
             File.Move(pending, _scriptPath, overwrite: true);
             _services.Runner.Start(_scriptPath);
-            IsDirty = false;
+            if (_editCount == editsAtStart) IsDirty = false;
             SetStatus($"Applied {hotkeys.Count(h => h.Enabled)} hotkey(s).", InfoBarSeverity.Success);
         }
         catch (AhkNotFoundException)
         {
-            File.Delete(pending);
             SetStatus("AutoHotkey v2 was not found. Set its path in Settings. Your hotkeys are saved.", InfoBarSeverity.Error);
         }
+        catch (Exception ex)
+        {
+            _services.Log.Write(ex, "Applying hotkeys");
+            SetStatus($"Could not apply hotkeys: {ex.Message}", InfoBarSeverity.Error);
+        }
+        finally
+        {
+            try { if (File.Exists(pending)) File.Delete(pending); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>Stops an in-progress recording, resuming the script paused for it. Leaves the trigger as last recorded.</summary>
+    public void CancelRecording()
+    {
+        if (IsRecording) StopRecording();
     }
 
     public void RecordKeyDown(string ahkKey)
@@ -159,6 +178,8 @@ public sealed partial class HotkeysViewModel : ObservableObject
     private void OnItemChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(HotkeyItemViewModel.Error) or nameof(HotkeyItemViewModel.Summary)) return;
+        _editCount++;
+        if (sender is HotkeyItemViewModel changed) changed.Error = null;
         IsDirty = true;
         RefreshPreview();
     }
