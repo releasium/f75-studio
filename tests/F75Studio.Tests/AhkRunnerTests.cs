@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using F75Studio.Hotkeys;
 using F75Studio.Tests.TestSupport;
 
@@ -87,12 +88,34 @@ public class AhkRunnerTests : IDisposable
         if (exe is null) return;
         var script = _temp.WriteFile("persist.ahk", "#Requires AutoHotkey v2.0\nPersistent\n");
         using var runner = new AhkRunner(exe);
+        var changes = new List<string>();
+        runner.RunningChanged += (_, path) => { lock (changes) changes.Add(path); };
+        var full = Path.GetFullPath(script);
+        var before = Process.GetProcessesByName("AutoHotkey64").Select(p => p.Id).ToHashSet();
 
         runner.Start(script);
         Assert.True(runner.IsRunning(script));
-        Assert.Contains(Path.GetFullPath(script), runner.RunningScripts);
+        Assert.Contains(full, runner.RunningScripts);
+        lock (changes) Assert.Contains(full, changes);
 
+        // Our process is the AutoHotkey64 instance that appeared since Start.
+        Process[] started = [];
+        for (var i = 0; i < 30 && started.Length == 0; i++)
+        {
+            started = Process.GetProcessesByName("AutoHotkey64").Where(p => !before.Contains(p.Id)).ToArray();
+            if (started.Length == 0) Thread.Sleep(100);
+        }
+        Assert.NotEmpty(started);
+
+        int changesBeforeStop;
+        lock (changes) changesBeforeStop = changes.Count;
         runner.Stop(script);
         Assert.False(runner.IsRunning(script));
+        lock (changes) Assert.True(changes.Count > changesBeforeStop && changes[^1] == full);
+
+        foreach (var p in started)
+        {
+            Assert.True(p.WaitForExit(3000), "AutoHotkey process should have exited after Stop.");
+        }
     }
 }

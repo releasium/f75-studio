@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 
@@ -36,23 +37,29 @@ public sealed class AhkRunner : IAhkRunner, IDisposable
         psi.ArgumentList.Add(Path.GetFullPath(scriptPath));
 
         using var process = Process.Start(psi)!;
-        var stderr = process.StandardError.ReadToEndAsync();
-        var stdout = process.StandardOutput.ReadToEndAsync();
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(ValidateTimeout);
         try
         {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            process.Kill();
-            return new AhkValidationResult(false, "AutoHotkey did not finish validating within 10 seconds.", null);
-        }
+            var stderr = process.StandardError.ReadToEndAsync();
+            var stdout = process.StandardOutput.ReadToEndAsync();
 
-        var output = await stderr + await stdout;
-        return process.ExitCode == 0 ? AhkValidationResult.Ok : AhkErrorParser.Parse(output);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(ValidateTimeout);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                return new AhkValidationResult(false, "AutoHotkey did not finish validating within 10 seconds.", null);
+            }
+
+            var output = await stderr + await stdout;
+            return process.ExitCode == 0 ? AhkValidationResult.Ok : AhkErrorParser.Parse(output);
+        }
+        finally
+        {
+            KillQuietly(process);
+        }
     }
 
     public void Start(string scriptPath)
@@ -64,7 +71,6 @@ public sealed class AhkRunner : IAhkRunner, IDisposable
         var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(full)! };
         psi.ArgumentList.Add(full);
         var process = Process.Start(psi)!;
-        process.EnableRaisingEvents = true;
         process.Exited += (_, _) =>
         {
             lock (_gate)
@@ -74,7 +80,9 @@ public sealed class AhkRunner : IAhkRunner, IDisposable
             RunningChanged?.Invoke(this, full);
         };
 
+        // Track before enabling events so an instantly exiting script cannot leave a stale entry.
         lock (_gate) _processes[full] = process;
+        process.EnableRaisingEvents = true;
         RunningChanged?.Invoke(this, full);
     }
 
@@ -95,15 +103,16 @@ public sealed class AhkRunner : IAhkRunner, IDisposable
                 process.WaitForExit(1500);
             }
         }
-        catch (InvalidOperationException)
+        catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException or AggregateException)
         {
-            // Process already exited.
+            // Best effort: the process already exited or could not be stopped.
+            KillQuietly(process);
         }
         finally
         {
-            process.Dispose();
+            try { process.Dispose(); } catch (Exception) { /* best effort */ }
+            RunningChanged?.Invoke(this, full);
         }
-        RunningChanged?.Invoke(this, full);
     }
 
     public bool IsRunning(string scriptPath)
@@ -115,10 +124,25 @@ public sealed class AhkRunner : IAhkRunner, IDisposable
     {
         List<string> paths;
         lock (_gate) paths = _processes.Keys.ToList();
-        foreach (var path in paths) Stop(path);
+        foreach (var path in paths)
+        {
+            try { Stop(path); } catch (Exception) { /* keep stopping the rest */ }
+        }
     }
 
     public void Dispose() => StopAll();
+
+    private static void KillQuietly(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill();
+        }
+        catch (Exception e) when (e is InvalidOperationException or Win32Exception or NotSupportedException or AggregateException)
+        {
+            // Already exited or cannot be killed.
+        }
+    }
 
     private string RequireExe() =>
         AhkExePath is { } exe && File.Exists(exe) ? exe : throw new AhkNotFoundException();
