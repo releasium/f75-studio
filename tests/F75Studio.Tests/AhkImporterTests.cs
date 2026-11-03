@@ -52,8 +52,32 @@ public class AhkImporterTests
     {
         var hotkeys = AhkImporter.Import("#HotIf WinActive(\"ahk_exe chrome.exe\")\n^t::Send \"^t\"\n#HotIf\n^y::Return\n", "g").Hotkeys;
 
+        Assert.Equal(2, hotkeys.Count);
         Assert.Equal("chrome.exe", hotkeys[0].AppScope);
         Assert.Null(hotkeys[1].AppScope);
+    }
+
+    [Fact]
+    public void Bare_words_are_remaps_only_when_they_are_key_names()
+    {
+        var hotkeys = AhkImporter.Import("^q::ExitApp\nF5::Reload\nSpace::Enter\na::b\n", "g").Hotkeys;
+
+        Assert.Equal(new CustomCodeAction("ExitApp"), hotkeys[0].Action);
+        Assert.Equal(new CustomCodeAction("Reload"), hotkeys[1].Action);
+        Assert.Equal(new RemapAction("Enter"), hotkeys[2].Action);
+        Assert.Equal(new RemapAction("b"), hotkeys[3].Action);
+    }
+
+    [Fact]
+    public void Unsupported_HotIf_skips_its_section_until_the_next_HotIf()
+    {
+        var result = AhkImporter.Import("#HotIf GetKeyState(\"Shift\")\n^k::Send \"x\"\n^m::\n{\n    MsgBox 1\n}\n#HotIf\n^j::Return\n", "g");
+
+        var hotkey = Assert.Single(result.Hotkeys);
+        Assert.Equal("^j", hotkey.Trigger);
+        Assert.IsType<DisableKeyAction>(hotkey.Action);
+        Assert.Null(hotkey.AppScope);
+        Assert.Equal(new[] { "#HotIf GetKeyState(\"Shift\")", "^k::Send \"x\"", "^m::" }, result.SkippedLines);
     }
 
     [Fact]

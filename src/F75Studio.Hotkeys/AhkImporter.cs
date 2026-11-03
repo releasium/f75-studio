@@ -15,8 +15,20 @@ public static partial class AhkImporter
     [GeneratedRegex(@"^#HotIf\s+WinActive\(\s*[""']ahk_exe\s+(?<exe>[^""']+)[""']\s*\)\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex HotIfExe();
 
-    [GeneratedRegex(@"^[A-Za-z0-9_]+$|^\S$")]
-    private static partial Regex KeyName();
+    [GeneratedRegex(@"^F(?:[1-9]|1[0-9]|2[0-4])$", RegexOptions.IgnoreCase)]
+    private static partial Regex FunctionKey();
+
+    [GeneratedRegex(@"^(?:Numpad\w+|vk[0-9A-F]{2}(?:sc[0-9A-F]{3})?|sc[0-9A-F]{3}|(?:Media|Volume|Browser|Launch)_\w+)$", RegexOptions.IgnoreCase)]
+    private static partial Regex KeyPattern();
+
+    private static readonly HashSet<string> NamedKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Escape", "Esc", "Enter", "Return", "Space", "Tab", "Backspace", "BS", "Delete", "Del", "Insert", "Ins",
+        "Home", "End", "PgUp", "PgDn", "Up", "Down", "Left", "Right", "CapsLock", "ScrollLock", "NumLock",
+        "Ctrl", "LCtrl", "RCtrl", "Control", "Alt", "LAlt", "RAlt", "Shift", "LShift", "RShift", "LWin", "RWin",
+        "AppsKey", "PrintScreen", "Pause", "Break", "Sleep", "LButton", "RButton", "MButton", "XButton1", "XButton2",
+        "WheelUp", "WheelDown", "WheelLeft", "WheelRight",
+    };
 
     public static ImportResult Import(string scriptText, string defaultGroup)
     {
@@ -25,6 +37,7 @@ public static partial class AhkImporter
         var skipped = new List<string>();
         var group = defaultGroup;
         string? scope = null;
+        var skipping = false;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -41,9 +54,10 @@ public static partial class AhkImporter
             if (line.StartsWith('#'))
             {
                 if (IgnoredDirectives.Contains(line.Split(' ', 2)[0])) continue;
-                if (line.Equals("#HotIf", StringComparison.OrdinalIgnoreCase)) { scope = null; continue; }
+                if (line.Equals("#HotIf", StringComparison.OrdinalIgnoreCase)) { scope = null; skipping = false; continue; }
                 var hotIf = HotIfExe().Match(line);
-                if (hotIf.Success) { scope = hotIf.Groups["exe"].Value.Trim(); continue; }
+                if (hotIf.Success) { scope = hotIf.Groups["exe"].Value.Trim(); skipping = false; continue; }
+                if (line.StartsWith("#HotIf", StringComparison.OrdinalIgnoreCase)) skipping = true;
                 skipped.Add(line);
                 continue;
             }
@@ -58,11 +72,12 @@ public static partial class AhkImporter
             if (rest.Length == 0 || rest == "{")
             {
                 var body = ReadBlock(lines, ref i, openedOnSameLine: rest == "{");
-                if (body is null) { skipped.Add(line); continue; }
+                if (body is null || skipping) { skipped.Add(line); continue; }
                 action = new CustomCodeAction(body);
             }
             else
             {
+                if (skipping) { skipped.Add(line); continue; }
                 action = ParseAction(rest);
             }
 
@@ -83,9 +98,16 @@ public static partial class AhkImporter
             return MediaKeys.TryParse(keys, out var media) ? new MediaAction(media) : new SendKeysAction(keys);
         }
         if (TryCall(rest, "Run", out var command)) return ParseRun(command);
-        if (KeyName().IsMatch(rest)) return new RemapAction(rest);
+        if (IsKeyName(rest)) return new RemapAction(rest);
         return new CustomCodeAction(rest);
     }
+
+    /// <summary>True for a single character or a recognised AutoHotkey key name; other single words are code, not keys.</summary>
+    private static bool IsKeyName(string name) =>
+        (name.Length == 1 && !char.IsWhiteSpace(name[0]))
+        || NamedKeys.Contains(name)
+        || FunctionKey().IsMatch(name)
+        || KeyPattern().IsMatch(name);
 
     /// <summary>Matches <c>Name "literal"</c> or <c>Name("literal")</c> with nothing after it.</summary>
     private static bool TryCall(string rest, string name, out string argument)
