@@ -201,4 +201,80 @@ public class ScreenSyncEngineTests
         Assert.Equal(1, h.Captures.Disposed);
         Assert.False(faulted);
     }
+
+    [Fact]
+    public async Task Unexpected_exception_faults_and_engine_can_restart()
+    {
+        var h = new Harness();
+        h.Captures.Enqueue(Solid(Red));
+        string? fault = null;
+        h.Engine.Faulted += m => fault = m;
+        await h.Engine.StartAsync(() => throw new InvalidOperationException("boom"));
+        await WaitUntil(() => fault is not null);
+
+        Assert.Equal("boom", fault);
+        Assert.False(h.Engine.IsRunning);
+        Assert.Equal(1, h.Device.LiveStops);
+
+        h.Captures.Enqueue(Solid(Red));
+        await h.Engine.StartAsync(() => 9);
+        Assert.True(h.Engine.IsRunning);
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Count >= 1);
+        await h.Engine.StopAsync();
+        Assert.Equal(2, h.Device.LiveStarts);
+        Assert.Equal(2, h.Device.LiveStops);
+    }
+
+    [Fact]
+    public async Task Throwing_subscriber_does_not_stop_streaming()
+    {
+        var h = new Harness();
+        h.Captures.Enqueue(Solid(Red)).Enqueue(Solid(Blue));
+        h.Engine.FrameSent += _ => throw new InvalidOperationException("subscriber");
+        await h.Engine.StartAsync(() => 9);
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Count >= 2);
+        Assert.True(h.Engine.IsRunning);
+        await h.Engine.StopAsync();
+    }
+
+    [Fact]
+    public async Task Factory_failure_during_pause_retries_on_a_delay_and_recovers()
+    {
+        var h = new Harness();
+        h.Captures.Enqueue(Solid(Red)).Enqueue(new ScreenCaptureException("locked")).Enqueue(Solid(Red));
+        h.Captures.OnCapture = () => { if (h.Captures.Calls == 2) h.Captures.CreateFailure = new IOException("gpu reset"); };
+        var statuses = new List<string?>();
+        h.Engine.CaptureStatusChanged += s => { lock (statuses) statuses.Add(s); };
+        await h.Engine.StartAsync(() => 9);
+        await WaitUntil(() => h.DelayCount >= 4);
+        h.Captures.CreateFailure = null;
+        await WaitUntil(() => { lock (statuses) return statuses.Count >= 2; });
+        await h.Engine.StopAsync();
+
+        Assert.All(h.Delays.Skip(1).Take(3), d => Assert.Equal(500, d));
+        lock (statuses) Assert.Equal(new string?[] { "Screen capture paused: locked", null }, statuses.Take(2));
+    }
+
+    [Fact]
+    public async Task Concurrent_start_and_stop_leave_a_consistent_state()
+    {
+        var h = new Harness();
+        h.Captures.Enqueue(Solid(Red));
+        var start = Task.Run(() => h.Engine.StartAsync(() => 9));
+        var stop = Task.Run(() => h.Engine.StopAsync());
+        await Task.WhenAll(start, stop);
+
+        if (h.Engine.IsRunning)
+        {
+            Assert.Equal(1, h.Device.LiveStarts);
+            Assert.Equal(0, h.Device.LiveStops);
+        }
+        else
+        {
+            Assert.Equal(h.Device.LiveStarts, h.Device.LiveStops);
+        }
+        await h.Engine.StopAsync();
+        Assert.False(h.Engine.IsRunning);
+        Assert.Equal(h.Device.LiveStarts, h.Device.LiveStops);
+    }
 }

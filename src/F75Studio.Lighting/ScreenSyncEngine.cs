@@ -88,8 +88,7 @@ public sealed class ScreenSyncEngine : IScreenSync
 
             cts.Cancel();
             try { await loop.WaitAsync(TimeSpan.FromMilliseconds(_timing.StopTimeoutMs)).ConfigureAwait(false); }
-            catch (TimeoutException) { }
-            catch (OperationCanceledException) { }
+            catch { /* timeout or a loop failure: cleanup below must always run */ }
             await StopLiveOnceAsync().ConfigureAwait(false);
             _running = false;
             cts.Dispose();
@@ -126,7 +125,14 @@ public sealed class ScreenSyncEngine : IScreenSync
 
                 try
                 {
-                    capture ??= _captureFactory();
+                    if (capture is null)
+                    {
+                        try { capture = _captureFactory(); }
+                        catch (Exception factoryEx) when (factoryEx is not OperationCanceledException)
+                        {
+                            throw new ScreenCaptureException(factoryEx.Message, factoryEx);
+                        }
+                    }
                     var frame = capture.TryCapture(_timing.FramePeriodMs);
                     if (frame is not null)
                     {
@@ -139,7 +145,7 @@ public sealed class ScreenSyncEngine : IScreenSync
                         }
                     }
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (Exception ex) when (ex is ScreenCaptureException or ArgumentException)
                 {
                     if (!paused)
                     {
@@ -176,8 +182,10 @@ public sealed class ScreenSyncEngine : IScreenSync
         catch (OperationCanceledException)
         {
         }
-        catch (Exception ex) when (ex is KeyboardUnavailableException or IOException)
+        catch (Exception ex)
         {
+            // A stop in progress (or a run orphaned by a stop timeout) must not touch the next session.
+            if (ct.IsCancellationRequested) return;
             try { capture?.Dispose(); } catch { /* best effort */ }
             capture = null;
             await StopLiveOnceAsync().ConfigureAwait(false);

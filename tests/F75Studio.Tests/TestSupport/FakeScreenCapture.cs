@@ -12,6 +12,9 @@ public sealed class FakeScreenCaptureFactory
     /// <summary>Invoked at the start of every TryCapture call.</summary>
     public Action? OnCapture { get; set; }
 
+    /// <summary>When set, Create() throws it (and does not count as created).</summary>
+    public Exception? CreateFailure { get; set; }
+
     public int Created => Volatile.Read(ref _created);
     public int Disposed => Volatile.Read(ref _disposed);
     public int Calls => Volatile.Read(ref _calls);
@@ -24,6 +27,7 @@ public sealed class FakeScreenCaptureFactory
 
     public IScreenCapture Create()
     {
+        if (CreateFailure is { } failure) throw failure;
         Interlocked.Increment(ref _created);
         return new Capture(this);
     }
