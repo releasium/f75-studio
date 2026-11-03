@@ -1,0 +1,17 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\F75Studio.Core\F75Studio.Core.csproj" />
+    <ProjectReference Include="..\F75Studio.Hotkeys\F75Studio.Hotkeys.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>F75Studio</AssemblyName>
+  </PropertyGroup>
+
+</Project>
