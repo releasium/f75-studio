@@ -3,6 +3,8 @@ using System.Windows.Threading;
 using F75Studio.App.Services;
 using F75Studio.App.ViewModels;
 using F75Studio.Core;
+using F75Studio.Lighting;
+using F75Studio.Lighting.Aula;
 using Wpf.Ui.Appearance;
 using Wpf.Ui.Controls;
 
@@ -18,6 +20,8 @@ public partial class App : Application
     private MainWindow? _window;
     private HotkeysViewModel? _hotkeys;
     private ScriptsViewModel? _scripts;
+    private AulaF75Device? _keyboardDevice;
+    private KeyboardViewModel? _keyboard;
     private bool _started;
     private bool _exiting;
     private bool _watchingSystemTheme;
@@ -31,6 +35,7 @@ public partial class App : Application
         {
             // Logoff/shutdown: no prompt. Keep un-applied cards so they load again next time.
             _hotkeys?.SaveDrafts();
+            try { _keyboard?.FlushAsync().GetAwaiter().GetResult(); } catch { /* shutting down anyway */ }
             ExitApp();
         };
 
@@ -63,11 +68,12 @@ public partial class App : Application
         ApplyTheme(_services.Settings.Theme);
         _services.SettingsChanged += (_, settings) => ApplyTheme(settings.Theme);
 
-        _tray = new TrayService(_services, ShowMainWindow, RequestExit);
+        _tray = new TrayService(_services, ShowMainWindow, RequestExit, () => _keyboard?.ProfileNamesSnapshot() ?? [], ApplyLightingProfile);
         _instance!.ArgumentsReceived += (_, args) => Ui.Run(() => HandleArguments(args));
         _services.StartAutoRunScripts();
 
         if (!e.Args.Contains("--tray")) ShowMainWindow();
+        HandleArguments(e.Args);
     }
 
     private static bool ConfirmOverwrite(string message) => ConfirmDiscard(message);
@@ -84,9 +90,14 @@ public partial class App : Application
         var scripts = new ScriptsViewModel(services, hotkeys, page => main?.Navigate(page), ConfirmDiscard, ConfirmOverwrite);
         _hotkeys = hotkeys;
         _scripts = scripts;
+        _keyboardDevice = new AulaF75Device();
+        var lightingStore = new JsonFileStore<LightingProfileSet>(services.Paths.ProfilesFile, () => new LightingProfileSet());
+        var keyboard = new KeyboardViewModel(_keyboardDevice, lightingStore);
+        _keyboard = keyboard;
         var settings = new SettingsViewModel(services, new RegistryStartupRegistration(AppExecutable.Path));
         NavItem[] pages =
         [
+            new NavItem("Keyboard", SymbolRegular.Lightbulb24, keyboard),
             new NavItem("Hotkeys", SymbolRegular.Keyboard24, hotkeys),
             new NavItem("Scripts", SymbolRegular.Code24, scripts),
             new NavItem("Settings", SymbolRegular.Settings24, settings),
@@ -94,10 +105,18 @@ public partial class App : Application
         return main = new MainViewModel(pages);
     }
 
-    /// <summary>Handles arguments forwarded by a second instance. Plan 2 adds "--profile".</summary>
+    /// <summary>Handles startup arguments and ones forwarded by a second instance: --show, --profile "Name".</summary>
     private void HandleArguments(string[] args)
     {
         if (args.Contains("--show")) ShowMainWindow();
+        var index = Array.IndexOf(args, "--profile");
+        if (index >= 0 && index + 1 < args.Length) ApplyLightingProfile(args[index + 1]);
+    }
+
+    private void ApplyLightingProfile(string name)
+    {
+        if (_keyboard?.ApplyProfileByName(name) != true)
+            _tray?.Notify("Lighting profile not found", $"There is no lighting profile named \"{name}\".");
     }
 
     private void ShowMainWindow()
@@ -122,10 +141,12 @@ public partial class App : Application
         _exiting = true;
         // Cancel any recording first so it cannot restart the generated script after StopAll.
         try { _hotkeys?.CancelRecording(resume: false); } catch { /* shutting down anyway */ }
+        try { _keyboard?.FlushAsync().GetAwaiter().GetResult(); } catch { /* shutting down anyway */ }
         try { _services?.Runner.StopAll(); }
         catch (Exception ex) { _services?.Log.Write(ex, "Stopping scripts on exit"); }
         finally
         {
+            try { _keyboardDevice?.Dispose(); } catch { /* shutting down anyway */ }
             try { _tray?.Dispose(); } catch { /* shutting down anyway */ }
             try { _instance?.Dispose(); } catch { /* shutting down anyway */ }
             if (_window is not null)

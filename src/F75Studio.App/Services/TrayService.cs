@@ -12,10 +12,15 @@ public sealed class TrayService : IDisposable
     private readonly HotkeyPauser _pauser;
     private readonly Action _show;
     private readonly Action _exit;
+    private readonly Func<IReadOnlyList<string>> _lightingProfiles;
+    private readonly Action<string> _applyLightingProfile;
     private readonly TaskbarIcon _icon;
 
-    public TrayService(AppServices services, Action show, Action exit)
+    public TrayService(AppServices services, Action show, Action exit,
+        Func<IReadOnlyList<string>> lightingProfiles, Action<string> applyLightingProfile)
     {
+        _lightingProfiles = lightingProfiles;
+        _applyLightingProfile = applyLightingProfile;
         _services = services;
         _pauser = new HotkeyPauser(services.Runner);
         _show = show;
@@ -46,6 +51,15 @@ public sealed class TrayService : IDisposable
         menu.Items.Clear();
         menu.Items.Add(Item("Open F75 Studio", _show));
         menu.Items.Add(new Separator());
+
+        var lighting = new MenuItem { Header = "Lighting" };
+        foreach (var name in _lightingProfiles())
+        {
+            var profileName = name;
+            lighting.Items.Add(Item(profileName, () => _applyLightingProfile(profileName)));
+        }
+        if (lighting.Items.Count == 0) lighting.Items.Add(new MenuItem { Header = "No profiles", IsEnabled = false });
+        menu.Items.Add(lighting);
 
         var scripts = new MenuItem { Header = "Scripts" };
         foreach (var script in ScriptDiscovery.Discover(_services.Paths.ScriptSearchFolders))

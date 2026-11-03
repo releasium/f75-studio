@@ -1,0 +1,204 @@
+<UserControl x:Class="F75Studio.App.Views.KeyboardView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:vm="clr-namespace:F75Studio.App.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance vm:KeyboardViewModel}">
+    <UserControl.Resources>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,12,0,4" />
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="24,8,24,24">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Header: title, device status, profiles -->
+            <DockPanel Grid.Row="0" Margin="0,0,0,12">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ComboBox MinWidth="180" ItemsSource="{Binding ProfileNames}" SelectedItem="{Binding SelectedProfile}" Margin="0,0,8,0" />
+                    <ui:TextBox Width="150" Text="{Binding ProfileNameEdit, UpdateSourceTrigger=PropertyChanged}" PlaceholderText="Profile name" Margin="0,0,4,0" />
+                    <ui:Button Content="Rename" Command="{Binding RenameProfileCommand}" Margin="0,0,8,0" />
+                    <ui:Button Icon="{ui:SymbolIcon Add24}" ToolTip="New profile" Command="{Binding NewProfileCommand}" Margin="0,0,4,0" />
+                    <ui:Button Icon="{ui:SymbolIcon Copy24}" ToolTip="Duplicate profile" Command="{Binding DuplicateProfileCommand}" Margin="0,0,4,0" />
+                    <ui:Button Icon="{ui:SymbolIcon Delete24}" ToolTip="Delete profile" Command="{Binding DeleteProfileCommand}" />
+                </StackPanel>
+                <StackPanel>
+                    <TextBlock Text="Keyboard" FontSize="28" FontWeight="SemiBold" />
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse Width="10" Height="10" Margin="0,0,8,0" VerticalAlignment="Center">
+                            <Ellipse.Style>
+                                <Style TargetType="Ellipse">
+                                    <Setter Property="Fill" Value="#FFE0A000" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding DeviceStatus}" Value="Connected">
+                                            <Setter Property="Fill" Value="#FF2EB67D" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding DeviceStatus}" Value="Unsupported">
+                                            <Setter Property="Fill" Value="#FFE5484D" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding DeviceStatus}" Value="Error">
+                                            <Setter Property="Fill" Value="#FFE5484D" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Ellipse.Style>
+                        </Ellipse>
+                        <TextBlock Text="{Binding DeviceStatusText}" Opacity="0.8" TextWrapping="Wrap" MaxWidth="560" />
+                    </StackPanel>
+                </StackPanel>
+            </DockPanel>
+
+            <ui:InfoBar Grid.Row="1" Margin="0,0,0,12" Message="{Binding StatusMessage}"
+                        IsOpen="{Binding IsStatusOpen, Mode=TwoWay}" Severity="{Binding StatusSeverity}" IsClosable="True" />
+
+            <!-- Keyboard picture -->
+            <Border Grid.Row="2" CornerRadius="12" Padding="12" Background="#FF1B1B1F" MaxWidth="980">
+                <Viewbox Stretch="Uniform">
+                    <ItemsControl x:Name="KeyboardCanvas" ItemsSource="{Binding Keys}" Width="660" Height="290">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <Canvas />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemContainerStyle>
+                            <Style TargetType="ContentPresenter">
+                                <Setter Property="Canvas.Left" Value="{Binding X}" />
+                                <Setter Property="Canvas.Top" Value="{Binding Y}" />
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:KeyItemViewModel}">
+                                <Border Width="{Binding Width}" Height="{Binding Height}" CornerRadius="4"
+                                        Background="#FF2A2A30" BorderThickness="1.5"
+                                        MouseLeftButtonDown="OnKeyMouseDown" MouseEnter="OnKeyMouseEnter" Cursor="Hand"
+                                        ToolTip="{Binding Name}">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="BorderBrush" Value="#33FFFFFF" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                    <Setter Property="BorderBrush" Value="White" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+                                    <Grid>
+                                        <Border Margin="3" CornerRadius="3" Background="{Binding Color, Converter={StaticResource RgbBrush}}" Opacity="0.85" />
+                                        <TextBlock Text="{Binding Name}" FontSize="7" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                            <TextBlock.Effect>
+                                                <DropShadowEffect BlurRadius="2" ShadowDepth="0" Opacity="0.9" />
+                                            </TextBlock.Effect>
+                                        </TextBlock>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Viewbox>
+            </Border>
+
+            <!-- Controls -->
+            <Grid Grid.Row="3" Margin="0,16,0,0" MaxWidth="980" HorizontalAlignment="Left">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="24" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="Effect" Style="{StaticResource FieldLabel}" />
+                    <ComboBox ItemsSource="{Binding Effects}" SelectedItem="{Binding SelectedEffect}" DisplayMemberPath="Name" />
+
+                    <StackPanel Visibility="{Binding ShowBrightness, Converter={StaticResource BoolVisible}}">
+                        <TextBlock Style="{StaticResource FieldLabel}">
+                            <Run Text="Brightness" /> <Run Text="{Binding Brightness, Mode=OneWay}" />
+                        </TextBlock>
+                        <Slider Minimum="0" Maximum="9" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding Brightness}" />
+                    </StackPanel>
+
+                    <StackPanel Visibility="{Binding ShowSpeed, Converter={StaticResource BoolVisible}}">
+                        <TextBlock Style="{StaticResource FieldLabel}">
+                            <Run Text="Speed" /> <Run Text="{Binding Speed, Mode=OneWay}" /> <Run Text="(0 = fastest)" Foreground="Gray" />
+                        </TextBlock>
+                        <Slider Minimum="0" Maximum="4" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding Speed}" />
+                    </StackPanel>
+
+                    <StackPanel Visibility="{Binding ShowPerKeyTools, Converter={StaticResource BoolVisible}}">
+                        <TextBlock Text="Per-key: select keys, pick a colour, then paint" Style="{StaticResource FieldLabel}" />
+                        <ItemsControl ItemsSource="{Binding GroupNames}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <ui:Button Content="{Binding}" Margin="0,0,6,6"
+                                               Command="{Binding DataContext.SelectGroupCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                               CommandParameter="{Binding}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <StackPanel Orientation="Horizontal">
+                            <ui:Button Content="Paint selected" Appearance="Primary" Icon="{ui:SymbolIcon PaintBrush24}" Command="{Binding PaintSelectedCommand}" Margin="0,0,8,0" />
+                            <ui:Button Content="Clear selection" Command="{Binding ClearSelectionCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Column="2">
+                    <StackPanel>
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ShowColor}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding ShowPerKeyTools}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <TextBlock Text="Colour" Style="{StaticResource FieldLabel}" />
+                        <ItemsControl ItemsSource="{Binding Swatches}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Width="28" Height="28" Margin="0,0,6,6" BorderThickness="0"
+                                            Background="{Binding Converter={StaticResource RgbBrush}}"
+                                            Command="{Binding DataContext.PickSwatchCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                            CommandParameter="{Binding}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock Text="Hue" Style="{StaticResource FieldLabel}" />
+                        <Slider Minimum="0" Maximum="359" Value="{Binding Hue}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Border Width="36" Height="36" CornerRadius="6" Margin="0,0,8,0" Background="{Binding Color, Converter={StaticResource RgbBrush}}" />
+                            <ui:TextBox Width="120" Text="{Binding ColorHex, UpdateSourceTrigger=PropertyChanged}" FontFamily="Cascadia Mono, Consolas" />
+                        </StackPanel>
+                        <CheckBox Content="Colourful (random colours)" IsChecked="{Binding Colorful}" Margin="0,8,0,0"
+                                  Visibility="{Binding ShowColor, Converter={StaticResource BoolVisible}}" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </ScrollViewer>
+</UserControl>
