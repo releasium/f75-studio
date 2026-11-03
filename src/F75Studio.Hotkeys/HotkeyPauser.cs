@@ -21,8 +21,12 @@ public sealed class HotkeyPauser
     public void Resume()
     {
         if (!IsPaused) return;
-        foreach (var script in _paused.Where(File.Exists)) _runner.Start(script);
-        _paused = [];
+        while (_paused.Count > 0)
+        {
+            var script = _paused[0];
+            if (File.Exists(script) && !_runner.IsRunning(script)) _runner.Start(script);
+            _paused.RemoveAt(0);
+        }
         IsPaused = false;
     }
 }

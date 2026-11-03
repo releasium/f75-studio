@@ -51,15 +51,16 @@ public sealed class TrayService : IDisposable
         foreach (var script in ScriptDiscovery.Discover(_services.Paths.ScriptSearchFolders))
         {
             var running = _services.Runner.IsRunning(script.Path);
-            var item = new MenuItem { Header = script.Name, IsCheckable = true, IsChecked = running };
+            var item = new MenuItem { Header = script.Name, IsCheckable = true, IsChecked = running, IsEnabled = !_pauser.IsPaused };
             item.Click += (_, _) => Guard(() =>
             {
-                if (running) _services.Runner.Stop(script.Path);
+                if (_services.Runner.IsRunning(script.Path)) _services.Runner.Stop(script.Path);
                 else _services.Runner.Start(script.Path);
             });
             scripts.Items.Add(item);
         }
         if (scripts.Items.Count == 0) scripts.Items.Add(new MenuItem { Header = "No scripts found", IsEnabled = false });
+        if (_pauser.IsPaused) scripts.Header = "Scripts (paused - resume to change)";
         menu.Items.Add(scripts);
 
         menu.Items.Add(Item(_pauser.IsPaused ? "Resume hotkeys" : "Pause all hotkeys", TogglePause));
