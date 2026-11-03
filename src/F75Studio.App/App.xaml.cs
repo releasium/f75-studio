@@ -63,12 +63,16 @@ public partial class App : Application
         if (!e.Args.Contains("--tray")) ShowMainWindow();
     }
 
+    private static bool ConfirmDiscard(string message) =>
+        System.Windows.MessageBox.Show(message, "F75 Studio", System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning, System.Windows.MessageBoxResult.No) == System.Windows.MessageBoxResult.Yes;
+
     /// <summary>Builds the navigation pages, in order.</summary>
     private static MainViewModel CreateMainViewModel(AppServices services)
     {
         MainViewModel? main = null;
         var hotkeys = new HotkeysViewModel(services);
-        var scripts = new ScriptsViewModel(services, hotkeys, page => main?.Navigate(page));
+        var scripts = new ScriptsViewModel(services, hotkeys, page => main?.Navigate(page), ConfirmDiscard);
         var settings = new SettingsViewModel(services, new RegistryStartupRegistration(AppExecutable.Path));
         NavItem[] pages =
         [

@@ -118,4 +118,88 @@ public class ScriptsViewModelTests : IDisposable
         Assert.True(vm.IsEditorDirty);
         Assert.Equal("old", File.ReadAllText(path));
     }
+
+    private ScriptsViewModel Create(Func<string, bool> confirm) => new(_services, _hotkeys, page => _navigatedTo = page, confirm);
+
+    [Fact]
+    public void Switching_with_unsaved_edits_and_confirm_declined_keeps_everything()
+    {
+        _temp.WriteFile(Path.Combine("docs", "a.ahk"), "A");
+        _temp.WriteFile(Path.Combine("docs", "b.ahk"), "B");
+        var asked = new List<string>();
+        var vm = Create(m => { asked.Add(m); return false; });
+        var a = vm.SelectedScript;
+        vm.Document.Text = "A edited";
+
+        vm.SelectedScript = vm.Scripts[1];
+
+        Assert.Single(asked);
+        Assert.Same(a, vm.SelectedScript);
+        Assert.Equal("A edited", vm.Document.Text);
+        Assert.True(vm.IsEditorDirty);
+    }
+
+    [Fact]
+    public void Switching_with_unsaved_edits_and_confirm_accepted_loads_the_new_script()
+    {
+        _temp.WriteFile(Path.Combine("docs", "a.ahk"), "A");
+        _temp.WriteFile(Path.Combine("docs", "b.ahk"), "B");
+        var vm = Create(_ => true);
+        vm.Document.Text = "A edited";
+
+        vm.SelectedScript = vm.Scripts[1];
+
+        Assert.Equal("b.ahk", vm.SelectedScript!.Name);
+        Assert.Equal("B", vm.Document.Text);
+        Assert.False(vm.IsEditorDirty);
+    }
+
+    [Fact]
+    public void Refresh_keeps_unsaved_edits()
+    {
+        var path = _temp.WriteFile(Path.Combine("docs", "a.ahk"), "A");
+        var vm = Create(_ => false);
+        vm.Document.Text = "A edited";
+
+        vm.RefreshCommand.Execute(null);
+
+        Assert.Equal("A edited", vm.Document.Text);
+        Assert.True(vm.IsEditorDirty);
+        Assert.Equal(Path.GetFullPath(path), vm.SelectedScript!.Path);
+        Assert.True(vm.SaveCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void Deleted_script_gives_an_error_empty_editor_and_no_save()
+    {
+        _temp.WriteFile(Path.Combine("docs", "a.ahk"), "A");
+        var b = _temp.WriteFile(Path.Combine("docs", "b.ahk"), "B");
+        var vm = Create(_ => true);
+        File.Delete(b);
+
+        vm.SelectedScript = vm.Scripts[1];
+        vm.Document.Text = "typed anyway";
+
+        Assert.True(vm.IsStatusOpen);
+        Assert.Equal(Wpf.Ui.Controls.InfoBarSeverity.Error, vm.StatusSeverity);
+        Assert.True(vm.IsEditorReadOnly);
+        Assert.False(vm.SaveCommand.CanExecute(null));
+        vm.SaveCommand.Execute(null);
+        Assert.Equal("A", File.ReadAllText(Path.Combine(_temp.Combine("docs"), "a.ahk")));
+        Assert.False(File.Exists(b));
+    }
+
+    [Fact]
+    public void Start_failure_is_reported_instead_of_thrown()
+    {
+        _temp.WriteFile(Path.Combine("docs", "a.ahk"), "");
+        var vm = Create();
+        _runner.StartException = new System.ComponentModel.Win32Exception("boom");
+
+        vm.StartCommand.Execute(null);
+
+        Assert.True(vm.IsStatusOpen);
+        Assert.Equal(Wpf.Ui.Controls.InfoBarSeverity.Error, vm.StatusSeverity);
+        Assert.False(vm.SelectedScript!.IsRunning);
+    }
 }
