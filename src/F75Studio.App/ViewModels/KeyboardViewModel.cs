@@ -22,6 +22,12 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private CancellationTokenSource? _pendingCts;
     private bool _loading;
     private bool _syncingColor;
+    private bool _syncingHue;
+    private string? _activeProfileName;
+    private LightingState? _lastApplied;
+    private bool _forcePending;
+    private int _applySeq;
+    private string? _lastSaveError;
 
     [ObservableProperty] private EffectDefinition _selectedEffect = F75Effects.Get(EffectIds.FixedOn);
     [ObservableProperty] private int _brightness = 9;
@@ -54,7 +60,15 @@ public sealed partial class KeyboardViewModel : ObservableObject
         {
             _profiles.Add(new LightingProfile("Default", new LightingState()));
             set = new LightingProfileSet { Profiles = _profiles.ToList(), Active = "Default" };
-            store.Save(set);
+            try
+            {
+                store.Save(set);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _lastSaveError = $"Couldn't save lighting profiles: {ex.Message}";
+                SetStatus(_lastSaveError, InfoBarSeverity.Error);
+            }
         }
         foreach (var p in _profiles) ProfileNames.Add(p.Name);
         SelectedProfile = _profiles.Any(p => p.Name == set.Active) ? set.Active : _profiles[0].Name;
@@ -95,7 +109,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     {
         var match = ProfileNames.FirstOrDefault(n => string.Equals(n, name.Trim(), StringComparison.OrdinalIgnoreCase));
         if (match is null) return false;
-        if (match == SelectedProfile) ScheduleApply();
+        if (match == _activeProfileName) ScheduleApply(force: true);
         else SelectedProfile = match;
         return true;
     }
@@ -143,16 +157,17 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private void NewProfile()
     {
         var n = 1;
-        while (ProfileNames.Contains($"Profile {n}")) n++;
+        while (NameTaken($"Profile {n}")) n++;
         AddProfile($"Profile {n}");
     }
 
     [RelayCommand]
     private void DuplicateProfile()
     {
-        var name = $"{SelectedProfile} copy";
+        if (_activeProfileName is null) return;
+        var name = $"{_activeProfileName} copy";
         var n = 2;
-        while (ProfileNames.Contains(name)) name = $"{SelectedProfile} copy {n++}";
+        while (NameTaken(name)) name = $"{_activeProfileName} copy {n++}";
         AddProfile(name);
     }
 
@@ -160,45 +175,65 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private void RenameProfile()
     {
         var newName = ProfileNameEdit.Trim();
-        if (newName.Length == 0 || SelectedProfile is null) return;
-        if (ProfileNames.Any(n => n != SelectedProfile && string.Equals(n, newName, StringComparison.OrdinalIgnoreCase)))
+        if (newName.Length == 0 || _activeProfileName is null) return;
+        if (ProfileNames.Any(n => n != _activeProfileName && string.Equals(n, newName, StringComparison.OrdinalIgnoreCase)))
         {
             SetStatus($"A profile named \"{newName}\" already exists.", InfoBarSeverity.Error);
             return;
         }
-        var index = _profiles.FindIndex(p => p.Name == SelectedProfile);
+        var index = _profiles.FindIndex(p => p.Name == _activeProfileName);
+        if (index < 0) return;
         _profiles[index] = _profiles[index] with { Name = newName };
+        _activeProfileName = newName;
         _loading = true;
-        ProfileNames[index] = newName;
-        SelectedProfile = newName;
-        _loading = false;
+        try
+        {
+            ProfileNames.RemoveAt(index);
+            ProfileNames.Insert(index, newName);
+            SelectedProfile = newName;
+        }
+        finally
+        {
+            _loading = false;
+        }
         Save();
     }
 
     [RelayCommand]
     private void DeleteProfile()
     {
-        if (_profiles.Count <= 1 || SelectedProfile is null)
+        if (_profiles.Count <= 1 || _activeProfileName is null)
         {
             SetStatus("You need at least one lighting profile.", InfoBarSeverity.Error);
             return;
         }
-        var index = _profiles.FindIndex(p => p.Name == SelectedProfile);
+        var index = _profiles.FindIndex(p => p.Name == _activeProfileName);
+        if (index < 0) return;
         _profiles.RemoveAt(index);
-        ProfileNames.RemoveAt(index);
+        _loading = true;
+        try
+        {
+            ProfileNames.RemoveAt(index);
+        }
+        finally
+        {
+            _loading = false;
+        }
         SelectedProfile = _profiles[0].Name;
         Save();
     }
 
     partial void OnSelectedProfileChanged(string? value)
     {
-        if (_loading || value is null) return;
+        // A bound ComboBox can push null transiently (e.g. while the item list changes): ignore it.
+        if (_loading || value is null || value == _activeProfileName) return;
         var profile = _profiles.FirstOrDefault(p => p.Name == value);
         if (profile is null) return;
+        _activeProfileName = value;
         Load(profile.State);
         ProfileNameEdit = value;
         Save();
-        ScheduleApply();
+        ScheduleApply(force: true);
     }
 
     partial void OnSelectedEffectChanged(EffectDefinition value)
@@ -219,8 +254,14 @@ public sealed partial class KeyboardViewModel : ObservableObject
         if (!_syncingColor)
         {
             _syncingColor = true;
-            ColorHex = value.ToHex();
-            _syncingColor = false;
+            try { ColorHex = value.ToHex(); }
+            finally { _syncingColor = false; }
+        }
+        if (!_syncingHue && TryGetHue(value, out var hue))
+        {
+            _syncingHue = true;
+            try { Hue = hue; }
+            finally { _syncingHue = false; }
         }
         OnStateChanged();
     }
@@ -229,70 +270,142 @@ public sealed partial class KeyboardViewModel : ObservableObject
     {
         if (_syncingColor || !Rgb.TryParseHex(value, out var rgb)) return;
         _syncingColor = true;
-        Color = rgb;
-        _syncingColor = false;
+        try { Color = rgb; }
+        finally { _syncingColor = false; }
     }
 
     partial void OnHueChanged(double value)
     {
-        if (_loading) return;
-        Color = Rgb.FromHsv(value, 1, 1);
+        if (_loading || _syncingHue) return;
+        _syncingHue = true;
+        try { Color = Rgb.FromHsv(value, 1, 1); }
+        finally { _syncingHue = false; }
     }
+
+    private bool NameTaken(string name) =>
+        ProfileNames.Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
 
     private void AddProfile(string name)
     {
         _profiles.Add(new LightingProfile(name, CurrentState));
         ProfileNames.Add(name);
+        _activeProfileName = name;
         _loading = true;
-        SelectedProfile = name;
-        ProfileNameEdit = name;
-        _loading = false;
+        try
+        {
+            SelectedProfile = name;
+            ProfileNameEdit = name;
+        }
+        finally
+        {
+            _loading = false;
+        }
         Save();
     }
 
     private void Load(LightingState state)
     {
         _loading = true;
-        var s = state.Normalize();
-        SelectedEffect = F75Effects.IsSupported(s.EffectId) ? F75Effects.Get(s.EffectId) : F75Effects.Get(EffectIds.FixedOn);
-        Brightness = s.Brightness;
-        Speed = s.Speed;
-        Color = s.Color;
-        Colorful = s.Colorful;
-        _keyColors = new Dictionary<int, Rgb>(s.KeyColors);
-        _loading = false;
+        try
+        {
+            var s = state.Normalize();
+            SelectedEffect = F75Effects.IsSupported(s.EffectId) ? F75Effects.Get(s.EffectId) : F75Effects.Get(EffectIds.FixedOn);
+            Brightness = s.Brightness;
+            Speed = s.Speed;
+            Color = s.Color;
+            Colorful = s.Colorful;
+            _keyColors = new Dictionary<int, Rgb>(s.KeyColors);
+        }
+        finally
+        {
+            _loading = false;
+        }
         RefreshPreview();
+    }
+
+    private static bool TryGetHue(Rgb c, out double hue)
+    {
+        hue = 0;
+        double r = c.R / 255.0, g = c.G / 255.0, b = c.B / 255.0;
+        var max = Math.Max(r, Math.Max(g, b));
+        var d = max - Math.Min(r, Math.Min(g, b));
+        if (d <= 0) return false; // grey: keep the current hue
+        hue = max == r ? 60 * (((g - b) / d % 6 + 6) % 6)
+            : max == g ? 60 * ((b - r) / d + 2)
+            : 60 * ((r - g) / d + 4);
+        return true;
+    }
+
+    /// <summary>True when both states produce the same bytes on the keyboard.</summary>
+    private static bool WireEqual(LightingState a, LightingState b)
+    {
+        if (a.EffectId != b.EffectId || a.Brightness != b.Brightness) return false;
+        if (!F75Effects.IsSupported(a.EffectId)) return false;
+        if (a.EffectId == EffectIds.PerKey)
+            return a.KeyColors.Count == b.KeyColors.Count
+                && a.KeyColors.All(kv => b.KeyColors.TryGetValue(kv.Key, out var v) && v == kv.Value);
+        var effect = F75Effects.Get(a.EffectId);
+        if (effect.HasSpeed && a.Speed != b.Speed) return false;
+        if (effect.HasColor)
+        {
+            if (a.Colorful != b.Colorful) return false;
+            if (!a.Colorful && a.Color != b.Color) return false;
+        }
+        return true;
     }
 
     private void OnStateChanged()
     {
         if (_loading) return;
         RefreshPreview();
-        var index = _profiles.FindIndex(p => p.Name == SelectedProfile);
+        var index = _profiles.FindIndex(p => p.Name == _activeProfileName);
         if (index >= 0) _profiles[index] = _profiles[index] with { State = CurrentState };
-        Save();
         ScheduleApply();
     }
 
-    private void Save() => _store.Save(new LightingProfileSet { Profiles = _profiles.ToList(), Active = SelectedProfile });
+    private void Save()
+    {
+        try
+        {
+            _store.Save(new LightingProfileSet { Profiles = _profiles.ToList(), Active = _activeProfileName });
+            _lastSaveError = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _lastSaveError = $"Couldn't save lighting profiles: {ex.Message}";
+            SetStatus(_lastSaveError, InfoBarSeverity.Error);
+        }
+    }
 
-    private void ScheduleApply()
+    private void ScheduleApply(bool force = false)
     {
         _pendingCts?.Cancel();
         var cts = new CancellationTokenSource();
         _pendingCts = cts;
-        var state = CurrentState;
-        PendingApply = ApplyAfterDebounceAsync(state, cts.Token);
+        if (force) _forcePending = true;
+        var seq = ++_applySeq;
+        PendingApply = ApplyAfterDebounceAsync(CurrentState, seq, cts.Token);
     }
 
-    private async Task ApplyAfterDebounceAsync(LightingState state, CancellationToken ct)
+    private async Task ApplyAfterDebounceAsync(LightingState state, int seq, CancellationToken ct)
     {
+        void Report(string message, InfoBarSeverity severity)
+        {
+            if (seq == _applySeq) SetStatus(message, severity);
+        }
+
         try
         {
+            // The token cancels only the debounce wait; a device write that has started is never interrupted.
             await _debounce(ct);
             if (ct.IsCancellationRequested) return;
-            await _device.ApplyAsync(state, ct);
-            SetStatus("Applied to keyboard.", InfoBarSeverity.Success);
+            Save();
+            if (!_forcePending && _lastApplied is { } last && WireEqual(last, state)) return;
+            _forcePending = false;
+            await _device.ApplyAsync(state, CancellationToken.None);
+            _lastApplied = state;
+            if (_lastSaveError is { } saveError) Report(saveError, InfoBarSeverity.Error);
+            else Report("Applied to keyboard.", InfoBarSeverity.Success);
         }
         catch (OperationCanceledException)
         {
@@ -300,11 +413,18 @@ public sealed partial class KeyboardViewModel : ObservableObject
         }
         catch (KeyboardUnavailableException ex)
         {
-            SetStatus($"Saved in F75 Studio. {ex.Message}", InfoBarSeverity.Warning);
+            _lastApplied = null;
+            Report($"Saved in F75 Studio. {ex.Message}", InfoBarSeverity.Warning);
         }
         catch (Exception ex) when (ex is F75ProtocolException or IOException or InvalidOperationException or ArgumentOutOfRangeException)
         {
-            SetStatus($"The keyboard rejected the change: {ex.Message}", InfoBarSeverity.Error);
+            _lastApplied = null;
+            Report($"The keyboard rejected the change: {ex.Message}", InfoBarSeverity.Error);
+        }
+        catch (Exception ex)
+        {
+            _lastApplied = null;
+            Report($"Couldn't apply lighting: {ex.Message}", InfoBarSeverity.Error);
         }
     }
 
@@ -312,7 +432,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     {
         DeviceStatus = _device.Status;
         DeviceStatusText = _device.StatusText;
-        if (DeviceStatus == DeviceStatus.Connected) ScheduleApply();
+        if (DeviceStatus == DeviceStatus.Connected) ScheduleApply(force: true);
     }
 
     private void RefreshPreview()

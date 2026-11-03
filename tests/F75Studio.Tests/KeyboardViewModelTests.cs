@@ -212,4 +212,129 @@ public class KeyboardViewModelTests : IDisposable
         vm.SelectedEffect = F75Effects.Get(EffectIds.PerKey);
         Assert.True(vm.ShowPerKeyTools);
     }
+
+    [Fact]
+    public async Task General_device_exception_is_an_error_status()
+    {
+        _device.FailWith = new Exception("boom");
+        var vm = Create();
+        await vm.PendingApply;
+        Assert.Equal(InfoBarSeverity.Error, vm.StatusSeverity);
+        Assert.Contains("Couldn't apply lighting: boom", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Changes_that_do_not_alter_the_wire_state_do_not_reach_the_device()
+    {
+        var vm = Create();
+        await vm.PendingApply;
+
+        vm.Speed = 4; // Static has no speed
+        await vm.PendingApply;
+        Assert.Single(_device.Applied);
+
+        vm.SelectGroupCommand.Execute("WASD");
+        vm.PaintSelectedCommand.Execute(null);
+        await vm.PendingApply;
+        var count = _device.Applied.Count;
+
+        vm.Color = new Rgb(1, 2, 3); // colour is irrelevant in per-key mode
+        vm.Hue = 100;
+        vm.PickSwatchCommand.Execute(vm.Swatches[0]);
+        await vm.PendingApply;
+        Assert.Equal(count, _device.Applied.Count);
+    }
+
+    [Fact]
+    public async Task Repainting_other_keys_in_per_key_mode_applies()
+    {
+        var vm = Create();
+        vm.SelectGroupCommand.Execute("WASD");
+        vm.PaintSelectedCommand.Execute(null);
+        await vm.PendingApply;
+        var count = _device.Applied.Count;
+
+        vm.Color = new Rgb(0, 255, 0);
+        vm.ClickKey(vm.Keys.Single(k => k.Name == "Q"), additive: false);
+        vm.PaintSelectedCommand.Execute(null);
+        await vm.PendingApply;
+        Assert.Equal(count + 1, _device.Applied.Count);
+    }
+
+    [Fact]
+    public async Task Profile_switch_applies_exactly_once_and_persists_active()
+    {
+        var store = Store();
+        store.Save(new LightingProfileSet
+        {
+            Profiles = [new("Default", new LightingState()), new("Gaming", new LightingState { EffectId = 3 })],
+            Active = "Default",
+        });
+        var vm = Create(store);
+        await vm.PendingApply;
+        var before = _device.Applied.Count;
+
+        vm.SelectedProfile = "Gaming";
+        await vm.PendingApply;
+
+        Assert.Equal(before + 1, _device.Applied.Count);
+        Assert.Equal("Gaming", Store().Load().Active);
+    }
+
+    [Fact]
+    public async Task Active_profile_is_persisted_after_rename_and_delete()
+    {
+        var vm = Create();
+        vm.NewProfileCommand.Execute(null);
+        vm.ProfileNameEdit = "Gaming";
+        vm.RenameProfileCommand.Execute(null);
+        await vm.PendingApply;
+        Assert.Equal("Gaming", Store().Load().Active);
+
+        vm.DeleteProfileCommand.Execute(null);
+        await vm.PendingApply;
+        Assert.Equal("Default", Store().Load().Active);
+    }
+
+    [Fact]
+    public async Task Save_failure_is_an_error_status_and_the_apply_still_happens()
+    {
+        var vm = Create();
+        await vm.PendingApply;
+        var path = _temp.Combine("profiles.json");
+        File.Delete(path);
+        Directory.CreateDirectory(path); // makes every save fail
+
+        vm.Brightness = 3;
+        await vm.PendingApply;
+
+        Assert.Equal(3, _device.Applied[^1].Brightness);
+        Assert.Equal(InfoBarSeverity.Error, vm.StatusSeverity);
+        Assert.Contains("Couldn't save lighting profiles", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Transient_null_profile_selection_does_not_break_saving()
+    {
+        var vm = Create();
+        await vm.PendingApply;
+
+        vm.SelectedProfile = null;
+        vm.Brightness = 3;
+        await vm.PendingApply;
+
+        var saved = Store().Load();
+        Assert.Equal("Default", saved.Active);
+        Assert.Equal(3, saved.Profiles.Single().State.Brightness);
+    }
+
+    [Fact]
+    public void Hue_follows_the_colour()
+    {
+        var vm = Create();
+        vm.ColorHex = "#00FF00";
+        Assert.Equal(120, vm.Hue, 1);
+        vm.Color = new Rgb(128, 128, 128); // grey keeps the hue
+        Assert.Equal(120, vm.Hue, 1);
+    }
 }
