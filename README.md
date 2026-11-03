@@ -27,3 +27,9 @@ Run `publish\F75Studio.exe`. Use `--tray` to start hidden in the tray.
 - Settings and hotkey cards: `%AppData%\F75Studio\`
 - Generated script: `Documents\F75Studio\hotkeys.ahk` (rewritten on every Apply; do not edit by hand)
 - Logs: `%AppData%\F75Studio\logs\`
+
+## Notes
+
+- F75 Studio only tracks scripts it started itself. Scripts already running from elsewhere (for example from Explorer or a startup shortcut) show as stopped.
+- Saving a script keeps the previous version as `<name>.ahk.bak` and, on the first save only, the untouched original as `<name>.ahk.orig`.
+- The AutoHotkey integration tests return early (and pass) if AutoHotkey v2 is not installed, so a green run on such a machine does not exercise them.

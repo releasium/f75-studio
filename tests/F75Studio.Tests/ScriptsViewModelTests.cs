@@ -202,4 +202,83 @@ public class ScriptsViewModelTests : IDisposable
         Assert.Equal(Wpf.Ui.Controls.InfoBarSeverity.Error, vm.StatusSeverity);
         Assert.False(vm.SelectedScript!.IsRunning);
     }
+
+    private static void Touch(string path, string content)
+    {
+        File.WriteAllText(path, content);
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddMinutes(5));
+    }
+
+    [Fact]
+    public void Save_refuses_when_file_changed_on_disk_and_overwrite_declined()
+    {
+        var path = _temp.WriteFile(Path.Combine("docs", "a.ahk"), "old");
+        var vm = Create();
+        vm.Document.Text = "mine";
+        Touch(path, "external");
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.Equal("external", File.ReadAllText(path));
+        Assert.True(vm.IsEditorDirty);
+        Assert.Equal(Wpf.Ui.Controls.InfoBarSeverity.Warning, vm.StatusSeverity);
+        Assert.Equal("Not saved: file changed on disk. Refresh to reload it.", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void Save_overwrites_changed_file_when_confirmed()
+    {
+        var path = _temp.WriteFile(Path.Combine("docs", "a.ahk"), "old");
+        string? asked = null;
+        var vm = new ScriptsViewModel(_services, _hotkeys, _ => { }, null, m => { asked = m; return true; });
+        vm.Document.Text = "mine";
+        Touch(path, "external");
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.Equal("mine", File.ReadAllText(path));
+        Assert.Equal("external", File.ReadAllText(path + ".bak"));
+        Assert.Equal("a.ahk was changed outside F75 Studio. Overwrite those changes?", asked);
+        Assert.False(vm.IsEditorDirty);
+    }
+
+    [Fact]
+    public void Second_save_does_not_prompt_about_its_own_write()
+    {
+        _temp.WriteFile(Path.Combine("docs", "a.ahk"), "old");
+        var vm = Create();
+        vm.Document.Text = "one";
+        vm.SaveCommand.Execute(null);
+        vm.Document.Text = "two";
+
+        vm.SaveCommand.Execute(null);
+
+        Assert.Equal("Saved a.ahk. The previous version is kept as a.ahk.bak.", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void First_save_mentions_orig_and_keeps_it_afterwards()
+    {
+        var path = _temp.WriteFile(Path.Combine("docs", "a.ahk"), "original");
+        var vm = Create();
+        vm.Document.Text = "v2";
+        vm.SaveCommand.Execute(null);
+        Assert.Contains(".orig", vm.StatusMessage);
+        vm.Document.Text = "v3";
+        vm.SaveCommand.Execute(null);
+
+        Assert.Equal("original", File.ReadAllText(path + ".orig"));
+        Assert.Equal("v2", File.ReadAllText(path + ".bak"));
+        Assert.DoesNotContain(".orig", vm.StatusMessage);
+    }
+
+    [Fact]
+    public void Import_is_disabled_for_the_generated_script()
+    {
+        _temp.WriteFile(Path.Combine("docs", "F75Studio", "hotkeys.ahk"), "; generated");
+        var vm = Create();
+
+        Assert.True(vm.SelectedScript!.IsGenerated);
+        Assert.False(vm.ImportIntoBuilderCommand.CanExecute(null));
+    }
 }

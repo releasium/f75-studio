@@ -16,6 +16,8 @@ public partial class App : Application
     private AppServices? _services;
     private TrayService? _tray;
     private MainWindow? _window;
+    private HotkeysViewModel? _hotkeys;
+    private ScriptsViewModel? _scripts;
     private bool _started;
     private bool _exiting;
     private bool _watchingSystemTheme;
@@ -25,7 +27,12 @@ public partial class App : Application
     {
         base.OnStartup(e);
         DispatcherUnhandledException += OnUnhandledException;
-        SessionEnding += (_, _) => ExitApp();
+        SessionEnding += (_, _) =>
+        {
+            // Logoff/shutdown: no prompt. Keep un-applied cards so they load again next time.
+            _hotkeys?.SaveDrafts();
+            ExitApp();
+        };
 
         _instance = new SingleInstance(InstanceName);
         if (!_instance.IsFirstInstance)
@@ -56,23 +63,27 @@ public partial class App : Application
         ApplyTheme(_services.Settings.Theme);
         _services.SettingsChanged += (_, settings) => ApplyTheme(settings.Theme);
 
-        _tray = new TrayService(_services, ShowMainWindow, ExitApp);
+        _tray = new TrayService(_services, ShowMainWindow, RequestExit);
         _instance!.ArgumentsReceived += (_, args) => Ui.Run(() => HandleArguments(args));
         _services.StartAutoRunScripts();
 
         if (!e.Args.Contains("--tray")) ShowMainWindow();
     }
 
+    private static bool ConfirmOverwrite(string message) => ConfirmDiscard(message);
+
     private static bool ConfirmDiscard(string message) =>
         System.Windows.MessageBox.Show(message, "F75 Studio", System.Windows.MessageBoxButton.YesNo,
             System.Windows.MessageBoxImage.Warning, System.Windows.MessageBoxResult.No) == System.Windows.MessageBoxResult.Yes;
 
     /// <summary>Builds the navigation pages, in order.</summary>
-    private static MainViewModel CreateMainViewModel(AppServices services)
+    private MainViewModel CreateMainViewModel(AppServices services)
     {
         MainViewModel? main = null;
         var hotkeys = new HotkeysViewModel(services);
-        var scripts = new ScriptsViewModel(services, hotkeys, page => main?.Navigate(page), ConfirmDiscard);
+        var scripts = new ScriptsViewModel(services, hotkeys, page => main?.Navigate(page), ConfirmDiscard, ConfirmOverwrite);
+        _hotkeys = hotkeys;
+        _scripts = scripts;
         var settings = new SettingsViewModel(services, new RegistryStartupRegistration(AppExecutable.Path));
         NavItem[] pages =
         [
@@ -97,10 +108,20 @@ public partial class App : Application
         _window.Activate();
     }
 
+    /// <summary>User-initiated exit (tray menu): asks first if there is un-applied or unsaved work.</summary>
+    private void RequestExit()
+    {
+        if (_exiting) return;
+        if (!ExitGuard.ShouldExit(_hotkeys?.IsDirty ?? false, _scripts?.IsEditorDirty ?? false, ConfirmDiscard)) return;
+        ExitApp();
+    }
+
     private void ExitApp()
     {
         if (_exiting) return;
         _exiting = true;
+        // Cancel any recording first so it cannot restart the generated script after StopAll.
+        try { _hotkeys?.CancelRecording(resume: false); } catch { /* shutting down anyway */ }
         try { _services?.Runner.StopAll(); }
         catch (Exception ex) { _services?.Log.Write(ex, "Stopping scripts on exit"); }
         finally
@@ -162,7 +183,10 @@ public partial class App : Application
             FailStartup(e.Exception);
             return;
         }
-        var path = GetLog().Write(e.Exception, "Unhandled UI exception");
-        _tray?.Notify("F75 Studio hit an error", $"Details were written to {path}");
+        string path;
+        try { path = GetLog().Write(e.Exception, "Unhandled UI exception"); }
+        catch { path = "(could not write log)"; }
+        try { _tray?.Notify("F75 Studio hit an error", $"Details were written to {path}"); }
+        catch { /* the handler itself must not throw */ }
     }
 }

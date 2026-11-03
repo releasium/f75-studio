@@ -1,11 +1,11 @@
 <?xml version="1.0"?>
 <SyntaxDefinition name="AutoHotkey" extensions=".ahk" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
-  <Color name="Comment" foreground="#6A9955" />
-  <Color name="String" foreground="#CE9178" />
-  <Color name="Directive" foreground="#C586C0" />
-  <Color name="Hotkey" foreground="#4FC1FF" fontWeight="bold" />
-  <Color name="Keyword" foreground="#569CD6" />
-  <Color name="SendKey" foreground="#DCDCAA" />
+  <Color name="Comment" foreground="#3A9A3A" />
+  <Color name="String" foreground="#B5532A" />
+  <Color name="Directive" foreground="#9B4DCA" />
+  <Color name="Hotkey" foreground="#1F7AC4" fontWeight="bold" />
+  <Color name="Keyword" foreground="#2F6FD0" />
+  <Color name="SendKey" foreground="#A0700A" />
   <RuleSet ignoreCase="true">
     <Span color="Comment" begin="(?&lt;=^|\s);" />
     <Span color="Comment" multiline="true" begin="/\*" end="\*/" />

@@ -18,6 +18,9 @@ public sealed partial class ScriptsViewModel : ObservableObject
     private readonly HotkeysViewModel _hotkeys;
     private readonly Action<object> _navigate;
     private readonly Func<string, bool> _confirmDiscard;
+    private readonly Func<string, bool> _confirmOverwrite;
+    private DateTime _loadedWriteTimeUtc;
+    private bool _savedFirstTime;
 
     // The file the current Document was loaded from; null when nothing (or a failed load) is shown.
     private string? _documentPath;
@@ -37,13 +40,16 @@ public sealed partial class ScriptsViewModel : ObservableObject
     [ObservableProperty] private bool _isStatusOpen;
     [ObservableProperty] private InfoBarSeverity _statusSeverity = InfoBarSeverity.Informational;
 
+    /// <param name="confirmOverwrite">Asked when the file changed on disk since it was loaded; true overwrites. Default: never overwrite.</param>
     /// <param name="confirmDiscard">Asked (with a message) before unsaved edits are dropped; true discards. Default: never discard.</param>
-    public ScriptsViewModel(AppServices services, HotkeysViewModel hotkeys, Action<object> navigate, Func<string, bool>? confirmDiscard = null)
+    public ScriptsViewModel(AppServices services, HotkeysViewModel hotkeys, Action<object> navigate,
+        Func<string, bool>? confirmDiscard = null, Func<string, bool>? confirmOverwrite = null)
     {
         _services = services;
         _hotkeys = hotkeys;
         _navigate = navigate;
         _confirmDiscard = confirmDiscard ?? (_ => false);
+        _confirmOverwrite = confirmOverwrite ?? (_ => false);
         services.Runner.RunningChanged += (_, _) => Ui.Run(UpdateRunningState);
         Refresh();
     }
@@ -122,7 +128,15 @@ public sealed partial class ScriptsViewModel : ObservableObject
         var path = _documentPath!;
         try
         {
+            if (File.Exists(path) && File.GetLastWriteTimeUtc(path) > _loadedWriteTimeUtc
+                && !_confirmOverwrite($"{script.Name} was changed outside F75 Studio. Overwrite those changes?"))
+            {
+                SetStatus("Not saved: file changed on disk. Refresh to reload it.", InfoBarSeverity.Warning);
+                return;
+            }
+            _savedFirstTime = !File.Exists(path + ".orig");
             ScriptFile.SaveWithBackup(path, Document.Text);
+            _loadedWriteTimeUtc = File.GetLastWriteTimeUtc(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -130,11 +144,13 @@ public sealed partial class ScriptsViewModel : ObservableObject
             return;
         }
         IsEditorDirty = false;
-        SetStatus($"Saved {script.Name}. The previous version is kept as {script.Name}.bak.", InfoBarSeverity.Success);
+        SetStatus(_savedFirstTime
+            ? $"Saved {script.Name}. The previous version is kept as {script.Name}.bak and the original as {script.Name}.orig."
+            : $"Saved {script.Name}. The previous version is kept as {script.Name}.bak.", InfoBarSeverity.Success);
         if (_services.Runner.IsRunning(path)) Guard(() => _services.Runner.Start(path));
     }
 
-    [RelayCommand(CanExecute = nameof(HasSelection))]
+    [RelayCommand(CanExecute = nameof(CanImport))]
     private void ImportIntoBuilder()
     {
         _hotkeys.ImportFromScript(Document.Text, Path.GetFileNameWithoutExtension(SelectedScript!.Name));
@@ -196,6 +212,7 @@ public sealed partial class ScriptsViewModel : ObservableObject
         {
             try
             {
+                _loadedWriteTimeUtc = File.GetLastWriteTimeUtc(script.Path);
                 text = File.ReadAllText(script.Path);
                 loadedFrom = script.Path;
             }
@@ -220,6 +237,8 @@ public sealed partial class ScriptsViewModel : ObservableObject
     }
 
     private bool HasSelection() => SelectedScript is not null;
+
+    private bool CanImport() => SelectedScript is { IsGenerated: false };
 
     private bool CanSave() =>
         SelectedScript is { IsGenerated: false } script && _documentPath == script.Path && IsEditorDirty;

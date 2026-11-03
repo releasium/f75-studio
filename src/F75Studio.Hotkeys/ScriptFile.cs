@@ -14,7 +14,12 @@ public static class ScriptFile
 
     public static void SaveWithBackup(string path, string content)
     {
-        if (File.Exists(path)) File.Copy(path, path + ".bak", overwrite: true);
+        if (File.Exists(path))
+        {
+            // The very first save keeps the untouched original forever; .bak is the rolling previous version.
+            if (!File.Exists(path + ".orig")) File.Copy(path, path + ".orig");
+            File.Copy(path, path + ".bak", overwrite: true);
+        }
         Write(path, content);
     }
 }

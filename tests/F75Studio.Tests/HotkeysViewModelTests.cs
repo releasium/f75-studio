@@ -259,4 +259,47 @@ public class HotkeysViewModelTests : IDisposable
 
         Assert.Null(vm.SelectedItem.Error);
     }
+
+    [Fact]
+    public void SaveDrafts_writes_cards_without_generating_or_starting()
+    {
+        var services = CreateServices();
+        var vm = new HotkeysViewModel(services);
+        vm.AddHotkeyCommand.Execute(null);
+        vm.SelectedItem!.Trigger = "^k";
+
+        Assert.True(vm.SaveDrafts());
+
+        Assert.Equal("^k", Assert.Single(services.HotkeyStore.Load()).Trigger);
+        Assert.False(File.Exists(services.Paths.GeneratedHotkeysScript));
+        Assert.Empty(_runner.Started);
+        Assert.Empty(_runner.Validated);
+    }
+
+    [Fact]
+    public void SaveDrafts_returns_false_instead_of_throwing_on_io_errors()
+    {
+        var services = CreateServices();
+        var vm = new HotkeysViewModel(services);
+        vm.AddHotkeyCommand.Execute(null);
+        // A directory where hotkeys.json should be makes the write fail.
+        Directory.CreateDirectory(services.Paths.HotkeysFile);
+
+        Assert.False(vm.SaveDrafts());
+    }
+
+    [Fact]
+    public void CancelRecording_without_resume_leaves_the_script_stopped()
+    {
+        var services = CreateServices();
+        var vm = new HotkeysViewModel(services);
+        vm.AddHotkeyCommand.Execute(null);
+        _runner.Start(services.Paths.GeneratedHotkeysScript);
+        vm.ToggleRecordingCommand.Execute(null);
+
+        vm.CancelRecording(resume: false);
+
+        Assert.False(vm.IsRecording);
+        Assert.False(_runner.IsRunning(services.Paths.GeneratedHotkeysScript));
+    }
 }

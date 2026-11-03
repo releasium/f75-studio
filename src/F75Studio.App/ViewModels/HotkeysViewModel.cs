@@ -116,7 +116,7 @@ public sealed partial class HotkeysViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            _services.Log.Write(ex, "Applying hotkeys");
+            try { _services.Log.Write(ex, "Applying hotkeys"); } catch { /* logging must not throw */ }
             SetStatus($"Could not apply hotkeys: {ex.Message}", InfoBarSeverity.Error);
         }
         finally
@@ -126,9 +126,25 @@ public sealed partial class HotkeysViewModel : ObservableObject
     }
 
     /// <summary>Stops an in-progress recording, resuming the script paused for it. Leaves the trigger as last recorded.</summary>
-    public void CancelRecording()
+    /// <param name="resume">False while the app is exiting, so the paused script is not restarted.</param>
+    public void CancelRecording(bool resume = true)
     {
-        if (IsRecording) StopRecording();
+        if (IsRecording) StopRecording(resume);
+    }
+
+    /// <summary>Writes the current cards to hotkeys.json without generating or applying anything. Returns false if it could not.</summary>
+    public bool SaveDrafts()
+    {
+        try
+        {
+            _services.HotkeyStore.Save(Items.Select(i => i.ToHotkey()).ToList());
+            return true;
+        }
+        catch (Exception ex)
+        {
+            try { _services.Log.Write(ex, "Saving hotkey drafts"); } catch { /* logging must not throw */ }
+            return false;
+        }
     }
 
     public void RecordKeyDown(string ahkKey)
@@ -195,12 +211,13 @@ public sealed partial class HotkeysViewModel : ObservableObject
         IsRecording = true;
     }
 
-    private void StopRecording()
+    private void StopRecording(bool resume = true)
     {
         _recorder = null;
         IsRecording = false;
         if (!_resumeAfterRecording) return;
         _resumeAfterRecording = false;
+        if (!resume) return;
         try { _services.Runner.Start(_scriptPath); }
         catch (AhkNotFoundException) { SetStatus("AutoHotkey v2 was not found. Set its path in Settings.", InfoBarSeverity.Error); }
     }
