@@ -40,7 +40,8 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private bool _screenRunning;
     private bool _locked;
     private bool _faulted;
-    private bool _exiting;
+    private volatile bool _exiting;
+    private bool _holdFaultStatus;
     private string? _capturePaused;
     private long _lastPreviewMs = long.MinValue;
 
@@ -177,7 +178,12 @@ public sealed partial class KeyboardViewModel : ObservableObject
     {
         var match = ProfileNames.FirstOrDefault(n => string.Equals(n, name.Trim(), StringComparison.OrdinalIgnoreCase));
         if (match is null) return false;
-        if (match == _activeProfileName) ScheduleApply(force: true);
+        if (match == _activeProfileName)
+        {
+            _faulted = false;
+            ScheduleApply(force: true);
+            UpdateScreenSync();
+        }
         else SelectedProfile = match;
         return true;
     }
@@ -512,11 +518,43 @@ public sealed partial class KeyboardViewModel : ObservableObject
             if (!_forcePending && _lastApplied is { } last && WireEqual(last, stored)) return;
             _forcePending = false;
             mine = ++_deviceSeq;
-            _lastApplied = null; // unknown until the write finishes, so a revert during the write is not skipped
-            // HID I/O (even HidSharp's synchronous parts) runs on the pool; this method resumes on the UI context.
-            await Task.Run(() => _device.ApplyAsync(stored, CancellationToken.None));
-            if (mine == _deviceSeq) _lastApplied = stored;
+
+            // A stored write ends the device's live session, so it goes through the screen-sync gate:
+            // stop the engine, write, then let UpdateScreenSync restart it if it should still run.
+            var gateHeld = false;
+            var restartSync = false;
+            if (_screenSync is not null)
+            {
+                await _syncGate.WaitAsync(CancellationToken.None);
+                gateHeld = true;
+            }
+            try
+            {
+                if (_screenRunning && _screenSync is not null)
+                {
+                    // Still streaming a live effect whose stored part is already on the keyboard: nothing to write.
+                    if (state.EffectId == EffectIds.ScreenSync && _lastApplied is { } onKeyboard && WireEqual(onKeyboard, stored))
+                        return;
+                    try { await _screenSync.StopAsync(); }
+                    catch { /* the engine cleans up after itself */ }
+                    _screenRunning = false;
+                    IsScreenSyncRunning = false;
+                    _capturePaused = null;
+                    RefreshPreview();
+                    restartSync = true;
+                }
+                _lastApplied = null; // unknown until the write finishes, so a revert during the write is not skipped
+                // HID I/O (even HidSharp's synchronous parts) runs on the pool; this method resumes on the UI context.
+                await Task.Run(() => _device.ApplyAsync(stored, CancellationToken.None));
+                if (mine == _deviceSeq) _lastApplied = stored;
+            }
+            finally
+            {
+                if (gateHeld) _syncGate.Release();
+                if (restartSync) UpdateScreenSync();
+            }
             if (_lastSaveError is { } saveError) Report(saveError, InfoBarSeverity.Error);
+            else if (_holdFaultStatus) _holdFaultStatus = false; // keep the "Screen sync stopped" message visible
             else Report("Applied to keyboard.", InfoBarSeverity.Success);
         }
         catch (OperationCanceledException)
@@ -578,22 +616,12 @@ public sealed partial class KeyboardViewModel : ObservableObject
     /// <summary>Stops the engine without restoring the stored effect (used on exit).</summary>
     public async Task StopScreenSyncAsync()
     {
-        _exiting = true;
+        _exiting = true; // any in-flight start/update bails out
         if (_screenSync is null) return;
-        await _syncGate.WaitAsync().ConfigureAwait(false);
-        try
-        {
-            if (_screenRunning)
-            {
-                try { await _screenSync.StopAsync().ConfigureAwait(false); }
-                catch { /* shutting down anyway */ }
-                _screenRunning = false;
-            }
-        }
-        finally
-        {
-            _syncGate.Release();
-        }
+        // Not through the gate (a long start must not block exit); the engine's StopAsync is idempotent.
+        try { await _screenSync.StopAsync().WaitAsync(TimeSpan.FromSeconds(1)).ConfigureAwait(false); }
+        catch { /* shutting down anyway */ }
+        _screenRunning = false;
     }
 
     /// <summary>Screen locked: stop streaming (and restore the stored effect); unlocked: start again if it should run.</summary>
@@ -612,6 +640,17 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private async Task UpdateScreenSyncAsync()
     {
         if (_screenSync is null) return;
+        // Before starting, let queued stored writes (profile switch, Connected) finish. Done outside the gate:
+        // those writes take the gate themselves.
+        if (ShouldRunScreenSync() && !_screenRunning)
+        {
+            Task pending;
+            do
+            {
+                pending = PendingApply;
+                await pending;
+            } while (!ReferenceEquals(pending, PendingApply));
+        }
         await _syncGate.WaitAsync();
         try
         {
@@ -642,15 +681,6 @@ public sealed partial class KeyboardViewModel : ObservableObject
     {
         _capturePaused = null;
         Interlocked.Exchange(ref _lastPreviewMs, long.MinValue);
-        // Let any queued stored write (profile switch, Connected) finish before the live stream begins.
-        Task pending;
-        do
-        {
-            pending = PendingApply;
-            await pending;
-        } while (!ReferenceEquals(pending, PendingApply));
-        if (!ShouldRunScreenSync()) return; // state changed while waiting; the newer update decides
-
         var wroteStored = false;
         try
         {
@@ -707,13 +737,21 @@ public sealed partial class KeyboardViewModel : ObservableObject
 
     private void OnScreenSyncFaulted(string reason)
     {
-        if (_exiting) return;
+        if (_exiting || _screenSync?.IsRunning == true) return; // exiting, or a stale fault from a run that was already replaced
         _faulted = true; // no automatic restart until the next Connected transition or effect selection
         _screenRunning = false;
         IsScreenSyncRunning = false;
         _capturePaused = null;
         RefreshPreview();
         SetStatus($"Screen sync stopped: {reason}", InfoBarSeverity.Warning);
+        // The keyboard is left on the last live frame: write the stored effect again, unless the device left the cable
+        // (the Connected transition applies it then).
+        if (DeviceStatus == DeviceStatus.Connected)
+        {
+            _lastApplied = null;
+            _holdFaultStatus = true;
+            ScheduleApply(force: true);
+        }
     }
 
     /// <summary>Engine thread: throttles to one preview update per 100 ms.</summary>

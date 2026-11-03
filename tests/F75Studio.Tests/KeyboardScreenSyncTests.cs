@@ -20,8 +20,11 @@ public class KeyboardScreenSyncTests : IDisposable
 
     private static async Task SettleAsync(KeyboardViewModel vm)
     {
-        await vm.PendingScreenSync;
-        await vm.PendingApply;
+        for (var i = 0; i < 3; i++)
+        {
+            await vm.PendingScreenSync;
+            await vm.PendingApply;
+        }
         await vm.PendingScreenSync;
     }
 
@@ -122,10 +125,13 @@ public class KeyboardScreenSyncTests : IDisposable
     public async Task Lock_stops_and_unlock_restarts()
     {
         var vm = await RunningAsync();
+        var count = _device.Applied.Count;
 
         vm.SetScreenLocked(true);
         await SettleAsync(vm);
         Assert.Equal(1, _sync.Stops);
+        Assert.Equal(count + 1, _device.Applied.Count);
+        Assert.Equal(EffectIds.FixedOn, _device.Applied[^1].EffectId);
 
         vm.SetScreenLocked(false);
         await SettleAsync(vm);
@@ -192,6 +198,144 @@ public class KeyboardScreenSyncTests : IDisposable
 
         Assert.Equal(1, _sync.Stops);
         Assert.Equal(count, _device.Applied.Count);
+    }
+
+    private async Task<KeyboardViewModel> RunningWithProfilesAsync()
+    {
+        LightingProfile P(string name, int baseId) => new(name, new LightingState { EffectId = EffectIds.ScreenSync, BaseEffectId = baseId });
+        Store().Save(new LightingProfileSet { Profiles = [P("A", 1), P("B", 2), P("C", 1)], Active = "A" });
+        var vm = Create();
+        await SettleAsync(vm);
+        Assert.Equal(1, _sync.Starts);
+        Assert.True(vm.IsScreenSyncRunning);
+        return vm;
+    }
+
+    [Fact]
+    public async Task Switching_to_another_live_profile_restarts_around_the_stored_write()
+    {
+        var vm = await RunningWithProfilesAsync();
+
+        vm.SelectedProfile = "B";
+        await SettleAsync(vm);
+
+        Assert.Equal(1, _sync.Stops);
+        Assert.Equal(2, _sync.Starts);
+        Assert.True(vm.IsScreenSyncRunning);
+        Assert.Equal(2, _device.Applied[^1].EffectId);
+        Assert.DoesNotContain("stopped", vm.StatusMessage ?? "");
+    }
+
+    [Fact]
+    public async Task Switching_to_a_live_profile_with_the_same_stored_part_keeps_streaming()
+    {
+        var vm = await RunningWithProfilesAsync();
+        var count = _device.Applied.Count;
+
+        vm.SelectedProfile = "C";
+        await SettleAsync(vm);
+
+        Assert.Equal(0, _sync.Stops);
+        Assert.Equal(1, _sync.Starts);
+        Assert.Equal(count, _device.Applied.Count);
+        Assert.True(vm.IsScreenSyncRunning);
+    }
+
+    [Fact]
+    public async Task Tray_reapply_of_the_active_live_profile_keeps_it_running()
+    {
+        var vm = await RunningWithProfilesAsync();
+
+        Assert.True(vm.ApplyProfileByName("A"));
+        await SettleAsync(vm);
+
+        Assert.Equal(0, _sync.Stops);
+        Assert.Equal(1, _sync.Starts);
+        Assert.True(vm.IsScreenSyncRunning);
+    }
+
+    [Fact]
+    public async Task Reapplying_after_a_fault_restarts_screen_sync()
+    {
+        var vm = await RunningWithProfilesAsync();
+        _sync.RaiseFaulted("unplugged");
+        await SettleAsync(vm);
+        Assert.False(vm.IsScreenSyncRunning);
+        Assert.Equal(1, _sync.Starts);
+
+        Assert.True(vm.ApplyProfileByName("A"));
+        await SettleAsync(vm);
+
+        Assert.Equal(2, _sync.Starts);
+        Assert.True(vm.IsScreenSyncRunning);
+    }
+
+    [Fact]
+    public async Task A_fault_on_the_cable_rewrites_the_stored_effect()
+    {
+        var vm = await RunningAsync();
+        var count = _device.Applied.Count;
+
+        _sync.RaiseFaulted("capture died");
+        await SettleAsync(vm);
+
+        Assert.Equal(count + 1, _device.Applied.Count);
+        Assert.Equal(EffectIds.FixedOn, _device.Applied[^1].EffectId);
+        Assert.Contains("capture died", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Start_failure_warns_and_does_not_run()
+    {
+        _sync.StartFailWith = new KeyboardUnavailableException("no cable");
+        var vm = Create();
+        await SettleAsync(vm);
+
+        vm.SelectedEffect = F75Effects.Get(EffectIds.ScreenSync);
+        await SettleAsync(vm);
+
+        Assert.False(vm.IsScreenSyncRunning);
+        Assert.Equal(InfoBarSeverity.Warning, vm.StatusSeverity);
+        Assert.Contains("no cable", vm.StatusMessage);
+    }
+
+    [Fact]
+    public async Task Start_failure_after_the_per_key_write_restores_the_stored_effect()
+    {
+        _sync.StartFailWith = new KeyboardUnavailableException("no cable");
+        var vm = Create(perKeyFirst: true);
+        await SettleAsync(vm);
+
+        vm.SelectedEffect = F75Effects.Get(EffectIds.ScreenSync);
+        await SettleAsync(vm);
+
+        Assert.Contains(_device.Applied, s => s.EffectId == EffectIds.PerKey);
+        Assert.Equal(EffectIds.FixedOn, _device.Applied[^1].EffectId);
+        Assert.False(vm.IsScreenSyncRunning);
+    }
+
+    [Fact]
+    public async Task Frames_within_100ms_update_the_preview_once()
+    {
+        var vm = await RunningAsync();
+        var esc = vm.Keys.First(k => k.Name == "Esc");
+
+        _sync.RaiseFrame(new Dictionary<int, Rgb> { [esc.Led] = new Rgb(255, 0, 0) });
+        _sync.RaiseFrame(new Dictionary<int, Rgb> { [esc.Led] = new Rgb(0, 255, 0) });
+
+        Assert.Equal(new Rgb(255, 0, 0), esc.Color);
+    }
+
+    [Fact]
+    public async Task A_stale_fault_from_a_replaced_run_is_ignored()
+    {
+        var vm = await RunningAsync();
+
+        // The engine is running again by the time the old run's fault reaches the UI.
+        _sync.RaiseFaultedWhileRunning("old run");
+
+        Assert.True(vm.IsScreenSyncRunning);
+        Assert.NotEqual(InfoBarSeverity.Warning, vm.StatusSeverity);
     }
 
     [Fact]

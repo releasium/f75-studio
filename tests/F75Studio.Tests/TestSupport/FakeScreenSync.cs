@@ -48,5 +48,8 @@ public sealed class FakeScreenSync : IScreenSync
         Faulted?.Invoke(reason);
     }
 
+    /// <summary>Raises Faulted without touching IsRunning (a stale fault from an earlier run).</summary>
+    public void RaiseFaultedWhileRunning(string reason) => Faulted?.Invoke(reason);
+
     public void RaiseCaptureStatus(string? text) => CaptureStatusChanged?.Invoke(text);
 }
