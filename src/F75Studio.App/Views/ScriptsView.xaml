@@ -1,0 +1,94 @@
+<UserControl x:Class="F75Studio.App.Views.ScriptsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+             xmlns:avalon="http://icsharpcode.net/sharpdevelop/avalonedit"
+             xmlns:vm="clr-namespace:F75Studio.App.ViewModels"
+             mc:Ignorable="d"
+             d:DataContext="{d:DesignInstance vm:ScriptsViewModel}">
+    <Grid Margin="24,8,24,24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="0,0,0,12">
+            <ui:Button DockPanel.Dock="Right" VerticalAlignment="Center" Content="Refresh"
+                       Icon="{ui:SymbolIcon ArrowClockwise24}" Command="{Binding RefreshCommand}" />
+            <StackPanel>
+                <TextBlock Text="Scripts" FontSize="28" FontWeight="SemiBold" />
+                <TextBlock Opacity="0.7" Text="AutoHotkey scripts in Documents, Documents\AutoHotkey and Documents\F75Studio." />
+            </StackPanel>
+        </DockPanel>
+
+        <ui:InfoBar Grid.Row="1" Margin="0,0,0,12" Message="{Binding StatusMessage}"
+                    IsOpen="{Binding IsStatusOpen, Mode=TwoWay}" Severity="{Binding StatusSeverity}" IsClosable="True" />
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="300" />
+                <ColumnDefinition Width="16" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ListBox Grid.Column="0" ItemsSource="{Binding Scripts}" SelectedItem="{Binding SelectedScript}"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:ScriptItemViewModel}">
+                        <Grid Margin="4,6" ToolTip="{Binding Path}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Ellipse Width="10" Height="10" Margin="0,0,10,0" VerticalAlignment="Center">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Fill" Value="#66808080" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsRunning}" Value="True">
+                                                <Setter Property="Fill" Value="#FF2EB67D" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                            <StackPanel Grid.Column="1">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                    <TextBlock Text="  generated" Opacity="0.6" Visibility="{Binding IsGenerated, Converter={StaticResource BoolVisible}}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding Folder}" Opacity="0.6" FontSize="12" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <DockPanel Grid.Column="2">
+                <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+                    <ui:Button Content="Start" Icon="{ui:SymbolIcon Play24}" Command="{Binding StartCommand}" Margin="0,0,8,8" />
+                    <ui:Button Content="Stop" Icon="{ui:SymbolIcon Stop24}" Command="{Binding StopCommand}" Margin="0,0,8,8" />
+                    <ui:Button Content="Restart" Icon="{ui:SymbolIcon ArrowClockwise24}" Command="{Binding RestartCommand}" Margin="0,0,16,8" />
+                    <ui:Button Content="Save" Icon="{ui:SymbolIcon Save24}" Appearance="Primary" Command="{Binding SaveCommand}" Margin="0,0,8,8" />
+                    <ui:Button Content="Import into builder" Icon="{ui:SymbolIcon ArrowImport24}" Command="{Binding ImportIntoBuilderCommand}" Margin="0,0,8,8" />
+                    <ui:Button Content="Open in VS Code" Icon="{ui:SymbolIcon Open24}" Command="{Binding OpenInVsCodeCommand}" Margin="0,0,16,8" />
+                    <CheckBox Content="Run at startup" VerticalAlignment="Center" Margin="0,0,0,8"
+                              IsChecked="{Binding SelectedScript.RunAtStartup}" IsEnabled="{Binding SelectedScript.CanRunAtStartup}" />
+                </WrapPanel>
+                <TextBlock DockPanel.Dock="Top" Opacity="0.7" Margin="0,0,0,8" TextWrapping="Wrap"
+                           Visibility="{Binding SelectedScript.IsGenerated, Converter={StaticResource BoolVisible}}"
+                           Text="This file is generated by the Hotkeys page and is read-only here." />
+                <Border CornerRadius="6" BorderThickness="1" BorderBrush="{DynamicResource ControlElevationBorderBrush}"
+                        Background="{DynamicResource ControlFillColorDefaultBrush}">
+                    <avalon:TextEditor x:Name="Editor" Document="{Binding Document}" IsReadOnly="{Binding SelectedScript.IsGenerated}"
+                                       FontFamily="Cascadia Mono, Consolas" FontSize="13" ShowLineNumbers="True" Padding="8"
+                                       Background="Transparent" Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                                       HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" />
+                </Border>
+            </DockPanel>
+        </Grid>
+    </Grid>
+</UserControl>

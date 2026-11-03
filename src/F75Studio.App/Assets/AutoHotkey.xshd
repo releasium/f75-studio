@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<SyntaxDefinition name="AutoHotkey" extensions=".ahk" xmlns="http://icsharpcode.net/sharpdevelop/syntaxdefinition/2008">
+  <Color name="Comment" foreground="#6A9955" />
+  <Color name="String" foreground="#CE9178" />
+  <Color name="Directive" foreground="#C586C0" />
+  <Color name="Hotkey" foreground="#4FC1FF" fontWeight="bold" />
+  <Color name="Keyword" foreground="#569CD6" />
+  <Color name="SendKey" foreground="#DCDCAA" />
+  <RuleSet ignoreCase="true">
+    <Span color="Comment" begin="(?&lt;=^|\s);" />
+    <Span color="Comment" multiline="true" begin="/\*" end="\*/" />
+    <Span color="String">
+      <Begin>"</Begin>
+      <End>"</End>
+      <RuleSet>
+        <Span begin="`" end="." />
+        <Rule color="SendKey">\{[^}\s]+\}</Rule>
+      </RuleSet>
+    </Span>
+    <Span color="String">
+      <Begin>'</Begin>
+      <End>'</End>
+      <RuleSet>
+        <Span begin="`" end="." />
+      </RuleSet>
+    </Span>
+    <Rule color="Directive">\#\w+</Rule>
+    <Rule color="Hotkey">^\s*[^\s:;"'(][^:"'(]*?::</Rule>
+    <Keywords color="Keyword">
+      <Word>Send</Word><Word>SendText</Word><Word>SendInput</Word><Word>Run</Word><Word>Return</Word>
+      <Word>if</Word><Word>else</Word><Word>loop</Word><Word>while</Word><Word>for</Word><Word>in</Word>
+      <Word>try</Word><Word>catch</Word><Word>global</Word><Word>local</Word><Word>static</Word>
+      <Word>MsgBox</Word><Word>Sleep</Word><Word>WinActivate</Word><Word>SetCapsLockState</Word>
+      <Word>GetKeyState</Word><Word>Persistent</Word><Word>ExitApp</Word><Word>Reload</Word>
+    </Keywords>
+  </RuleSet>
+</SyntaxDefinition>

@@ -8,4 +8,7 @@
     <DataTemplate DataType="{x:Type vm:HotkeysViewModel}">
         <views:HotkeysView />
     </DataTemplate>
+    <DataTemplate DataType="{x:Type vm:ScriptsViewModel}">
+        <views:ScriptsView />
+    </DataTemplate>
 </ResourceDictionary>
