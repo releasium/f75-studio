@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace F75Studio.Lighting;
 
 /// <summary>Maps a downscaled screen image onto the F75's keys, TV-ambilight style (screen-sync spec).</summary>
@@ -32,8 +34,12 @@ public static class EdgeMapper
             .Select(k => (k, EdgeKeys.MinBy(e => DistanceSquared(k, e.Key)).Key))
             .ToList();
 
+    /// <exception cref="ArgumentException">The frame is empty or its buffer is shorter than Width*Height*4.</exception>
     public static IReadOnlyDictionary<int, Rgb> Map(CapturedFrame frame)
     {
+        if (frame.Width <= 0 || frame.Height <= 0 || frame.Bgra.Length < (long)frame.Width * frame.Height * 4)
+            throw new ArgumentException("Frame must be non-empty and hold Width*Height*4 bytes.", nameof(frame));
+
         var result = new Dictionary<int, Rgb>(F75Layout.Keys.Count);
         foreach (var (key, edge) in EdgeKeys) result[key.Led] = Average(frame, Region(frame, key, edge));
         foreach (var (interior, source) in InteriorKeys)
@@ -47,14 +53,14 @@ public static class EdgeMapper
     private static (int X0, int Y0, int X1, int Y1) Region(CapturedFrame f, KeyDef key, Edge edge)
     {
         int w = f.Width, h = f.Height;
-        var depthY = Math.Max(1, (int)Math.Round(EdgeDepth * h));
-        var depthX = Math.Max(1, (int)Math.Round(EdgeDepth * w));
+        var (xStart, xEnd) = SpanX(key, w);
+        var (yStart, yEnd) = SpanY(key, h);
         return edge switch
         {
-            Edge.Top => (SpanX(key, w).Start, 0, SpanX(key, w).End, depthY),
-            Edge.Bottom => (SpanX(key, w).Start, h - depthY, SpanX(key, w).End, h),
-            Edge.Left => (0, SpanY(key, h).Start, depthX, SpanY(key, h).End),
-            _ => (w - depthX, SpanY(key, h).Start, w, SpanY(key, h).End),
+            Edge.Top => (xStart, 0, xEnd, Math.Max(1, (int)Math.Round(EdgeDepth * h))),
+            Edge.Bottom => (xStart, h - Math.Max(1, (int)Math.Round(EdgeDepth * h)), xEnd, h),
+            Edge.Left => (0, yStart, Math.Max(1, (int)Math.Round(EdgeDepth * w)), yEnd),
+            _ => (w - Math.Max(1, (int)Math.Round(EdgeDepth * w)), yStart, w, yEnd),
         };
     }
 
@@ -73,7 +79,9 @@ public static class EdgeMapper
 
     private static Rgb Average(CapturedFrame f, (int X0, int Y0, int X1, int Y1) r)
     {
-        long b = 0, g = 0, red = 0, n = 0;
+        long b = 0, g = 0, red = 0;
+        long n = (long)(r.X1 - r.X0) * (r.Y1 - r.Y0);
+        Debug.Assert(n > 0, "Edge regions are at least one pixel by construction.");
         for (var y = r.Y0; y < r.Y1; y++)
         for (var x = r.X0; x < r.X1; x++)
         {
@@ -81,9 +89,8 @@ public static class EdgeMapper
             b += f.Bgra[i];
             g += f.Bgra[i + 1];
             red += f.Bgra[i + 2];
-            n++;
         }
-        return n == 0 ? Rgb.Black : new Rgb((byte)Math.Round((double)red / n), (byte)Math.Round((double)g / n), (byte)Math.Round((double)b / n));
+        return new Rgb((byte)Math.Round((double)red / n), (byte)Math.Round((double)g / n), (byte)Math.Round((double)b / n));
     }
 
     private static byte Scale(byte v) => (byte)Math.Round(v * InteriorScale);

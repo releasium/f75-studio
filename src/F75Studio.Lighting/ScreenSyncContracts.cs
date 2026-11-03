@@ -20,9 +20,11 @@ public interface ILiveLighting
     /// <exception cref="KeyboardUnavailableException">Not on the USB cable, or identity check failed.</exception>
     Task StartLiveAsync(CancellationToken ct = default);
 
+    /// <remarks>Implementations serialize live frames with other device commands (one HID transaction at a time).</remarks>
     /// <exception cref="KeyboardUnavailableException">Live session ended (unplugged, send failed).</exception>
     Task SendLiveAsync(IReadOnlyDictionary<int, Rgb> colors, CancellationToken ct = default);
 
+    /// <remarks>Idempotent: calling it when not live is a no-op. Never throws.</remarks>
     Task StopLiveAsync();
 }
 
@@ -32,14 +34,17 @@ public interface IScreenSync
     bool IsRunning { get; }
 
     /// <summary>Raised on a background thread with each frame actually sent.</summary>
+    /// <remarks>The dictionary is a snapshot; the engine never mutates it after raising the event.</remarks>
     event Action<IReadOnlyDictionary<int, Rgb>>? FrameSent;
 
     /// <summary>Raised on a background thread when streaming stops by itself (reason text).</summary>
+    /// <remarks>Raised after <see cref="IsRunning"/> has become false.</remarks>
     event Action<string>? Faulted;
 
     /// <summary>Raised on a background thread when capture pauses/resumes (null = resumed).</summary>
     event Action<string?>? CaptureStatusChanged;
 
+    /// <param name="brightness">Called on the engine's background thread every frame; it must be thread-safe.</param>
     Task StartAsync(Func<int> brightness, CancellationToken ct = default);
     Task StopAsync();
 }
