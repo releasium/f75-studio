@@ -7,6 +7,7 @@ public class AccentMapperTests
     private static readonly Rgb Green = new(0, 255, 0);
     private static readonly Rgb Blue = new(0, 0, 255);
     private static readonly Rgb White = new(255, 255, 255);
+    private static readonly Rgb Black = new(0, 0, 0);
 
     private static int Led(string name) => F75Layout.Keys.Single(k => k.Name == name).Led;
 
@@ -26,69 +27,67 @@ public class AccentMapperTests
         return new CapturedFrame(w, h, data);
     }
 
-    [Fact]
-    public void Mostly_green_with_blue_gives_a_red_accent()
-    {
-        var frame = Make(64, 36, (x, _) => x < 44 ? Green : Blue);
+    // A red and orange poster in the middle of a black page, like a film poster opened in the browser.
+    private static CapturedFrame Poster() => Make(64, 36, (x, y) =>
+        x is < 23 or >= 41 || y is < 4 or >= 32 ? Black
+        : (x + y) % 3 == 0 ? new Rgb(240, 110, 20) // orange fire
+        : (x + y) % 3 == 1 ? new Rgb(230, 30, 35)  // red title
+        : new Rgb(60, 40, 35));                    // dark faces and coats
 
-        Assert.Equal(new Rgb(255, 0, 0), AccentMapper.Accent(frame));
+    [Fact]
+    public void Red_poster_on_black_gives_a_red_accent()
+    {
+        var a = AccentMapper.Accent(Poster())!.Value;
+
+        Assert.Equal(255, a.R);
+        Assert.True(a.G < 128 && a.B < 40, a.ToString()); // red to red-orange, never blue
     }
 
     [Fact]
     public void Main_keys_show_the_accent_and_frame_keys_the_screen()
     {
-        var frame = Make(64, 36, (x, _) => x < 44 ? Green : Blue);
+        var frame = Poster();
         var map = AccentMapper.Map(frame);
         var blur = BlurMapper.Map(frame);
+        var accent = AccentMapper.Accent(frame)!.Value;
 
         Assert.Equal(80, map.Count);
         foreach (var k in F75Layout.Keys)
-        {
-            if (FrameKeys.Contains(k.Name)) Assert.Equal(blur[k.Led], map[k.Led]);
-            else Assert.Equal(new Rgb(255, 0, 0), map[k.Led]);
-        }
-        Assert.Equal(new Rgb(255, 0, 0), map[Led("J")]);
+            Assert.Equal(FrameKeys.Contains(k.Name) ? blur[k.Led] : accent, map[k.Led]);
+        Assert.Equal(accent, map[Led("J")]);
     }
 
     [Fact]
-    public void One_colour_gives_its_complement()
+    public void The_colour_with_the_most_screen_wins()
     {
-        Assert.Equal(new Rgb(255, 0, 255), AccentMapper.Accent(Make(64, 36, (_, _) => Green)));
+        Assert.Equal(Green, AccentMapper.Accent(Make(64, 36, (x, _) => x < 44 ? Green : Blue)));
+        Assert.Equal(Blue, AccentMapper.Accent(Make(64, 36, (x, _) => x < 20 ? Green : Blue)));
     }
 
     [Fact]
-    public void A_small_second_colour_is_ignored()
+    public void Black_and_white_do_not_count()
     {
-        // Blue is under a quarter of green's weight, so green alone decides: its complement, magenta.
-        var frame = Make(64, 36, (x, _) => x < 58 ? Green : Blue);
-
-        Assert.Equal(new Rgb(255, 0, 255), AccentMapper.Accent(frame));
+        // Green covers only a quarter of the screen but is its only colour.
+        Assert.Equal(Green, AccentMapper.Accent(Make(64, 36, (x, _) => x < 24 ? White : x < 48 ? Black : Green)));
     }
 
     [Fact]
-    public void Accent_is_opposite_the_gap_between_two_close_colours()
+    public void Accent_is_full_strength_even_for_a_dark_colour()
     {
-        // Yellow (60°) and green (120°): the accent is the middle of the larger arc, 270° (violet).
-        var frame = Make(64, 36, (x, _) => x < 32 ? new Rgb(255, 255, 0) : Green);
-
-        Assert.Equal(new Rgb(128, 0, 255), AccentMapper.Accent(frame));
-    }
-
-    [Fact]
-    public void White_on_a_coloured_page_does_not_count()
-    {
-        var frame = Make(64, 36, (x, _) => x < 48 ? White : Green);
-
-        Assert.Equal(new Rgb(255, 0, 255), AccentMapper.Accent(frame));
+        Assert.Equal(new Rgb(255, 0, 0), AccentMapper.Accent(Make(64, 36, (_, _) => new Rgb(90, 0, 0))));
     }
 
     [Theory]
     [InlineData(255, 255, 255)]
     [InlineData(40, 40, 40)]
     [InlineData(200, 215, 200)] // too pale to count as a colour
-    public void Colourless_screen_uses_the_fallback_accent(byte r, byte g, byte b)
+    public void Colourless_screen_has_no_accent_and_every_key_follows_the_screen(byte r, byte g, byte b)
     {
-        Assert.Equal(AccentMapper.FallbackAccent, AccentMapper.Accent(Make(64, 36, (_, _) => new Rgb(r, g, b))));
+        var frame = Make(64, 36, (_, _) => new Rgb(r, g, b));
+
+        Assert.Null(AccentMapper.Accent(frame));
+        var blur = BlurMapper.Map(frame);
+        Assert.All(AccentMapper.Map(frame), kv => Assert.Equal(blur[kv.Key], kv.Value));
     }
 
     [Theory]
