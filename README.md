@@ -13,7 +13,7 @@ A small Windows tray app for the **AULA F75** keyboard. Change the keyboard's li
 - **Lighting editor.** Pick any of the keyboard's built-in effects (Static, Breathing, Rainbow, Ripples, Retro snake and more), set colour, brightness and speed, and see a live preview of the board.
 - **Per-key colours.** Paint individual keys with the Custom per-key effect.
 - **Screen sync (edges).** TV-ambilight style: the F-row follows the top of your screen, the bottom row the bottom edge, the side columns the left and right edges.
-- **Screen sync (blur).** Each key shows the blurred colour of the matching spot on the screen, so the whole board mirrors the picture.
+- **Screen sync (blur).** Each key shows the blurred colour of the matching spot on the screen, so the whole board mirrors the picture. Colours are favoured and boosted, so they stand out against white windows instead of washing out.
 - **Lighting profiles.** Save, rename, duplicate and switch profiles from the app or from the tray menu.
 - **Visual hotkey builder.** Record a trigger, choose an action (send keys, remap a key, type text, run a program or URL, media keys, switch lighting profile, disable a key or custom AHK code), and optionally limit it to one app. F75 Studio writes `Documents\F75Studio\hotkeys.ahk` and runs it with AutoHotkey v2.
 - **Script manager.** Start, stop and edit your other `.ahk` scripts, run them at startup, with automatic backups.

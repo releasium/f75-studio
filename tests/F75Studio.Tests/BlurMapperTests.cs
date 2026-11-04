@@ -29,12 +29,43 @@ public class BlurMapperTests
     [InlineData(40, 22)]
     [InlineData(64, 36)]
     [InlineData(1920, 1080)]
-    public void Uniform_frame_gives_that_colour_on_every_key(int w, int h)
+    public void Uniform_saturated_frame_gives_that_colour_on_every_key(int w, int h)
     {
-        var map = BlurMapper.Map(Make(w, h, (_, _) => new Rgb(10, 20, 30)));
+        var map = BlurMapper.Map(Make(w, h, (_, _) => new Rgb(0, 128, 255)));
 
         Assert.Equal(80, map.Count);
-        Assert.All(F75Layout.Keys, k => Assert.Equal(new Rgb(10, 20, 30), map[k.Led]));
+        Assert.All(F75Layout.Keys, k => Assert.Equal(new Rgb(0, 128, 255), map[k.Led]));
+    }
+
+    [Fact]
+    public void White_frame_is_dimmed_to_grey()
+    {
+        var map = BlurMapper.Map(Make(64, 36, (_, _) => new Rgb(255, 255, 255)));
+
+        Assert.All(F75Layout.Keys, k => Assert.Equal(new Rgb(89, 89, 89), map[k.Led]));
+    }
+
+    [Fact]
+    public void Colour_wins_over_a_mostly_white_background()
+    {
+        // Three white pixels for every red one: a plain average would be pale pink (255, 191, 191).
+        var map = BlurMapper.Map(Make(64, 36, (x, _) => x % 4 == 0 ? Red : new Rgb(255, 255, 255)));
+
+        Assert.All(F75Layout.Keys, k =>
+        {
+            var c = map[k.Led];
+            Assert.True(c.R > 200 && c.G < 40 && c.B < 40, $"{k.Name}: {c}");
+        });
+    }
+
+    [Fact]
+    public void Half_saturated_colour_gets_more_saturated_with_hue_kept()
+    {
+        var map = BlurMapper.Map(Make(64, 36, (_, _) => new Rgb(200, 100, 100)));
+
+        var c = map[Led("J")];
+        Assert.True(c.R > c.G && c.G == c.B, c.ToString());
+        Assert.True((c.R - c.G) / (double)c.R > 0.5 + 0.1, c.ToString()); // saturation 0.5 raised to 0.75
     }
 
     [Fact]
