@@ -706,7 +706,12 @@ public sealed partial class KeyboardViewModel : ObservableObject
             }
             await Task.Run(() => sync.StartAsync(
                 () => Volatile.Read(ref _brightnessForLive),
-                frame => Volatile.Read(ref _liveEffectId) == EffectIds.ScreenSyncBlur ? BlurMapper.Map(frame) : EdgeMapper.Map(frame)));
+                frame => Volatile.Read(ref _liveEffectId) switch
+                {
+                    EffectIds.ScreenSyncBlur => BlurMapper.Map(frame),
+                    EffectIds.ScreenSyncAccent => AccentMapper.Map(frame),
+                    _ => EdgeMapper.Map(frame),
+                }));
         }
         catch (Exception ex)
         {

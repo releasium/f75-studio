@@ -102,6 +102,25 @@ public class KeyboardScreenSyncTests : IDisposable
     }
 
     [Fact]
+    public async Task Blur_to_accent_while_running_swaps_the_mapper_without_restart_or_write()
+    {
+        var frame = SyntheticFrame();
+        var blur = BlurMapper.Map(frame);
+        Assert.False(AccentMapper.Map(frame).All(kv => blur[kv.Key] == kv.Value)); // frame distinguishes the mappers
+        var vm = await RunningBlurAsync();
+        var count = _device.Applied.Count;
+
+        vm.SelectedEffect = F75Effects.Get(EffectIds.ScreenSyncAccent);
+        await SettleAsync(vm);
+
+        Assert.Equal(1, _sync.Starts);
+        Assert.Equal(0, _sync.Stops);
+        Assert.Equal(count, _device.Applied.Count);
+        AssertSameMap(AccentMapper.Map(frame), _sync.LastMapper!(frame));
+        Assert.Equal(EffectIds.ScreenSyncAccent, Store().Load().Profiles.Single().State.EffectId);
+    }
+
+    [Fact]
     public async Task Edges_to_blur_while_running_swaps_the_mapper_without_restart_or_write()
     {
         var frame = SyntheticFrame();
