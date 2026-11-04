@@ -68,7 +68,7 @@
                 </StackPanel>
             </Grid>
             <TextBlock Margin="0,14,0,0" Opacity="0.7" FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
-                       Text="Keyboard: red while focusing, blue while resting; F1–F12 fill up as the time passes (blue during focus, red during rest). Needs the USB cable. Closing this window stops the timer." />
+                       Text="Keyboard: red while focusing, blue while resting; F1–F12 fill up as the time passes (blue during focus, red during rest); green while paused or not started. Needs the USB cable. Closing this window stops the timer." />
         </StackPanel>
     </Grid>
 </ui:FluentWindow>

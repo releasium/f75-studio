@@ -198,12 +198,16 @@ public class PomodoroMapperTests
     }
 
     [Fact]
-    public void Paused_dims_everything()
+    public void Not_running_is_green_and_the_bar_keeps_its_progress()
     {
-        var map = PomodoroMapper.Map(Snap(PomodoroPhase.Focus, 0.5, running: false));
+        var paused = PomodoroMapper.Map(Snap(PomodoroPhase.Focus, 0.5, running: false));
+        Assert.Equal(PomodoroMapper.IdleColor, Key(paused, "J"));
+        Assert.Equal(PomodoroMapper.IdleColor, Key(paused, "Esc"));
+        Assert.Equal(PomodoroMapper.RestColor, Key(paused, "F1"));
+        Assert.Equal(new Rgb(0, 0, 0), Key(paused, "F12"));
 
-        Assert.Equal(new Rgb(89, 0, 0), Key(map, "J"));
-        Assert.Equal(new Rgb(0, 22, 89), Key(map, "F1"));
-        Assert.Equal(new Rgb(0, 0, 0), Key(map, "F12"));
+        var ready = PomodoroMapper.Map(Snap(PomodoroPhase.Rest, 1, running: false));
+        Assert.Equal(PomodoroMapper.IdleColor, Key(ready, "Space"));
+        Assert.All(Bar, n => Assert.Equal(new Rgb(0, 0, 0), Key(ready, n)));
     }
 }

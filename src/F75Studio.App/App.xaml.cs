@@ -74,7 +74,7 @@ public partial class App : Application
         _services.SettingsChanged += (_, settings) => ApplyTheme(settings.Theme);
 
         _tray = new TrayService(_services, ShowMainWindow, RequestExit, () => _keyboard?.ProfileNamesSnapshot() ?? [], ApplyLightingProfile,
-            ShowPomodoro, () => _pomodoroWindow is not null);
+            ShowPomodoro, () => _pomodoroWindow is not null, () => _keyboard?.SelectedEffect.Id, SelectEffect);
         _instance!.ArgumentsReceived += (_, args) => Ui.Run(() => HandleArguments(args));
         _services.StartAutoRunScripts();
 
@@ -185,6 +185,14 @@ public partial class App : Application
         keyboard.Pomodoro.Start(); // opening the timer starts a focus period
         window.Show();
         keyboard.BeginPomodoro();
+    }
+
+    /// <summary>Tray Effect menu: the same as choosing the effect on the Keyboard page (saved in the active profile); Pomodoro opens the timer.</summary>
+    private void SelectEffect(int id)
+    {
+        if (_keyboard is not { } keyboard || !F75Effects.IsSupported(id)) return;
+        if (id == EffectIds.Pomodoro) ShowPomodoro();
+        else keyboard.SelectedEffect = F75Effects.Get(id);
     }
 
     private void NotifyPhase(PomodoroPhase phase)

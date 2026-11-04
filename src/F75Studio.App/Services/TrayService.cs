@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Windows.Controls;
 using CommunityToolkit.Mvvm.Input;
 using F75Studio.Hotkeys;
+using F75Studio.Lighting;
 using H.NotifyIcon;
 
 namespace F75Studio.App.Services;
@@ -16,12 +17,17 @@ public sealed class TrayService : IDisposable
     private readonly Action<string> _applyLightingProfile;
     private readonly Action _showPomodoro;
     private readonly Func<bool> _pomodoroOpen;
+    private readonly Func<int?> _currentEffect;
+    private readonly Action<int> _selectEffect;
     private readonly TaskbarIcon _icon;
 
+    /// <param name="currentEffect">The selected lighting effect id, or null while the Keyboard page isn't ready.</param>
     public TrayService(AppServices services, Action show, Action exit,
         Func<IReadOnlyList<string>> lightingProfiles, Action<string> applyLightingProfile,
-        Action showPomodoro, Func<bool> pomodoroOpen)
+        Action showPomodoro, Func<bool> pomodoroOpen, Func<int?> currentEffect, Action<int> selectEffect)
     {
+        _currentEffect = currentEffect;
+        _selectEffect = selectEffect;
         _showPomodoro = showPomodoro;
         _pomodoroOpen = pomodoroOpen;
         _lightingProfiles = lightingProfiles;
@@ -65,6 +71,18 @@ public sealed class TrayService : IDisposable
         }
         if (lighting.Items.Count == 0) lighting.Items.Add(new MenuItem { Header = "No profiles", IsEnabled = false });
         menu.Items.Add(lighting);
+
+        var effects = new MenuItem { Header = "Effect" };
+        var current = _currentEffect();
+        foreach (var effect in F75Effects.All)
+        {
+            var id = effect.Id;
+            var item = Item(effect.Name, () => _selectEffect(id));
+            item.IsChecked = current == id;
+            effects.Items.Add(item);
+        }
+        effects.IsEnabled = current is not null;
+        menu.Items.Add(effects);
 
         var pomodoro = Item("Pomodoro timer", _showPomodoro);
         pomodoro.IsChecked = _pomodoroOpen(); // a mark only: clicking always opens or brings forward the timer
