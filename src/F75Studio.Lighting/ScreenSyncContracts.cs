@@ -46,6 +46,9 @@ public interface IScreenSync
 
     /// <param name="brightness">Called on the engine's background thread every frame; it must be thread-safe.</param>
     /// <param name="mapper">Maps a captured frame to key colours; called on every engine tick (on the last frame when nothing new was captured), so it may switch result between ticks; null means <see cref="EdgeMapper.Map"/>.</param>
-    Task StartAsync(Func<int> brightness, Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>>? mapper = null, CancellationToken ct = default);
+    /// <param name="needsCapture">Called every tick; false means the mapper ignores the screen (Pomodoro), so no capture runs and the
+    /// mapper gets a blank 1x1 frame. Null means always capture.</param>
+    Task StartAsync(Func<int> brightness, Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>>? mapper = null,
+        Func<bool>? needsCapture = null, CancellationToken ct = default);
     Task StopAsync();
 }

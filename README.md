@@ -15,6 +15,7 @@ A small Windows tray app for the **AULA F75** keyboard. Change the keyboard's li
 - **Screen sync (edges).** TV-ambilight style: the F-row follows the top of your screen, the bottom row the bottom edge, the side columns the left and right edges.
 - **Screen sync (blur).** Each key shows the blurred colour of the matching spot on the screen, so the whole board mirrors the picture. Colours are favoured and boosted, so they stand out against white windows instead of washing out.
 - **Screen sync (accent).** The main keys glow in the screen's accent, its strongest colour (a red film poster on a black page gives red; black, white and grey don't count), and the frame keys (F-row, bottom row, side columns) show the surrounding screen.
+- **Pomodoro timer.** Open it from the tray (or pick "Pomodoro timer" in the Effect list, or run `F75Studio.exe --pomodoro`). The keyboard is red while you focus and blue while you rest, and F1–F12 drain like a progress bar as the time runs out. Focus and rest lengths are configurable (15 and 5 minutes by default); it keeps lighting the keyboard while the PC is locked, and closing the timer puts your lighting back.
 - **Lighting profiles.** Save, rename, duplicate and switch profiles from the app or from the tray menu.
 - **Visual hotkey builder.** Record a trigger, choose an action (send keys, remap a key, type text, run a program or URL, media keys, switch lighting profile, disable a key or custom AHK code), and optionally limit it to one app. F75 Studio writes `Documents\F75Studio\hotkeys.ahk` and runs it with AutoHotkey v2.
 - **Script manager.** Start, stop and edit your other `.ahk` scripts, run them at startup, with automatic backups.
@@ -53,7 +54,7 @@ To build a single executable:
 dotnet publish src/F75Studio.App -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -o publish
 ```
 
-Then run `publish\F75Studio.exe`. Use `--tray` to start hidden in the tray, or `--profile "<name>"` to switch the lighting profile (for example from a hotkey).
+Then run `publish\F75Studio.exe`. Use `--tray` to start hidden in the tray, `--pomodoro` to open the Pomodoro timer, or `--profile "<name>"` to switch the lighting profile (for example from a hotkey).
 
 Run the tests with:
 

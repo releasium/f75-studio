@@ -1,4 +1,4 @@
-using F75Studio.App.ViewModels;
+﻿using F75Studio.App.ViewModels;
 using F75Studio.Core;
 using F75Studio.Lighting;
 using F75Studio.Tests.TestSupport;
@@ -6,7 +6,7 @@ using Wpf.Ui.Controls;
 
 namespace F75Studio.Tests;
 
-public class KeyboardScreenSyncTests : IDisposable
+public partial class KeyboardScreenSyncTests : IDisposable
 {
     private readonly TempDirectory _temp = new();
     private readonly FakeKeyboardDevice _device = new();

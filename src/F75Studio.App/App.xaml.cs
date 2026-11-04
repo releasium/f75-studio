@@ -19,6 +19,7 @@ public partial class App : Application
     private AppServices? _services;
     private TrayService? _tray;
     private MainWindow? _window;
+    private PomodoroWindow? _pomodoroWindow;
     private HotkeysViewModel? _hotkeys;
     private ScriptsViewModel? _scripts;
     private AulaF75Device? _keyboardDevice;
@@ -72,7 +73,8 @@ public partial class App : Application
         ApplyTheme(_services.Settings.Theme);
         _services.SettingsChanged += (_, settings) => ApplyTheme(settings.Theme);
 
-        _tray = new TrayService(_services, ShowMainWindow, RequestExit, () => _keyboard?.ProfileNamesSnapshot() ?? [], ApplyLightingProfile);
+        _tray = new TrayService(_services, ShowMainWindow, RequestExit, () => _keyboard?.ProfileNamesSnapshot() ?? [], ApplyLightingProfile,
+            ShowPomodoro, () => _pomodoroWindow is not null);
         _instance!.ArgumentsReceived += (_, args) => Ui.Run(() => HandleArguments(args));
         _services.StartAutoRunScripts();
 
@@ -85,7 +87,11 @@ public partial class App : Application
 
         _powerMode = (_, args) =>
         {
-            if (args.Mode == Microsoft.Win32.PowerModes.Suspend) Ui.Run(() => _keyboard?.SetSuspended(true));
+            if (args.Mode == Microsoft.Win32.PowerModes.Suspend)
+            {
+                _keyboard?.Pomodoro.Pause(); // the timer must not run through sleep
+                Ui.Run(() => _keyboard?.SetSuspended(true));
+            }
             else if (args.Mode == Microsoft.Win32.PowerModes.Resume) Ui.Run(() => _keyboard?.SetSuspended(false));
         };
         SystemEvents.PowerModeChanged += _powerMode;
@@ -113,6 +119,14 @@ public partial class App : Application
         var screenSync = new ScreenSyncEngine(() => new DxgiScreenCapture(), _keyboardDevice!);
         var keyboard = new KeyboardViewModel(_keyboardDevice, lightingStore, screenSync: screenSync);
         _keyboard = keyboard;
+        keyboard.PomodoroSelected += ShowPomodoro;
+        // Another effect or a profile switch ends the Pomodoro lighting: close the timer with it rather than leave it counting unseen.
+        keyboard.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(KeyboardViewModel.SelectedEffect) && keyboard.SelectedEffect.Id != EffectIds.Pomodoro)
+                _pomodoroWindow?.Close();
+        };
+        keyboard.Pomodoro.PhaseChanged += phase => Ui.Run(() => NotifyPhase(phase));
         var settings = new SettingsViewModel(services, new RegistryStartupRegistration(AppExecutable.Path));
         NavItem[] pages =
         [
@@ -124,10 +138,11 @@ public partial class App : Application
         return main = new MainViewModel(pages);
     }
 
-    /// <summary>Handles startup arguments and ones forwarded by a second instance: --show, --profile "Name".</summary>
+    /// <summary>Handles startup arguments and ones forwarded by a second instance: --show, --pomodoro, --profile "Name".</summary>
     private void HandleArguments(string[] args)
     {
         if (args.Contains("--show")) ShowMainWindow();
+        if (args.Contains("--pomodoro")) ShowPomodoro();
         var index = Array.IndexOf(args, "--profile");
         if (index < 0) return;
         if (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
@@ -140,6 +155,43 @@ public partial class App : Application
     {
         if (_keyboard?.ApplyProfileByName(name) != true)
             _tray?.Notify("Lighting profile not found", $"There is no lighting profile named \"{name}\".");
+    }
+
+    /// <summary>Opens (or brings forward) the Pomodoro window and switches the lighting to the Pomodoro effect; closing it stops the timer and restores the previous effect.</summary>
+    private void ShowPomodoro()
+    {
+        if (_keyboard is not { } keyboard || _services is not { } services || _exiting) return;
+        if (_pomodoroWindow is { } open)
+        {
+            open.Show();
+            if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
+            open.Activate();
+            keyboard.BeginPomodoro();
+            return;
+        }
+
+        var settings = services.Settings;
+        var vm = new PomodoroViewModel(keyboard.Pomodoro, settings.PomodoroFocusMinutes, settings.PomodoroRestMinutes,
+            (focus, rest) => services.UpdateSettings(s => s with { PomodoroFocusMinutes = focus, PomodoroRestMinutes = rest }));
+        var window = new PomodoroWindow(vm);
+        window.Closed += (_, _) =>
+        {
+            _pomodoroWindow = null;
+            keyboard.Pomodoro.Reset();
+            keyboard.EndPomodoro();
+        };
+        _pomodoroWindow = window; // set before BeginPomodoro: selecting the effect raises PomodoroSelected again
+        keyboard.Pomodoro.Reset();
+        keyboard.Pomodoro.Start(); // opening the timer starts a focus period
+        window.Show();
+        keyboard.BeginPomodoro();
+    }
+
+    private void NotifyPhase(PomodoroPhase phase)
+    {
+        var settings = _services?.Settings;
+        if (phase == PomodoroPhase.Rest) _tray?.Notify("Focus done", $"Time for a {settings?.PomodoroRestMinutes ?? 5}-minute rest.");
+        else _tray?.Notify("Rest over", $"Back to focus for {settings?.PomodoroFocusMinutes ?? 15} minutes.");
     }
 
     private void ShowMainWindow()
@@ -172,6 +224,8 @@ public partial class App : Application
     private void ExitApp()
     {
         if (_exiting) return;
+        // Closing the timer first puts the profile's own effect back before the profile is flushed.
+        try { _pomodoroWindow?.Close(); } catch { /* shutting down anyway */ }
         _exiting = true;
         // Cancel any recording first so it cannot restart the generated script after StopAll.
         try { _hotkeys?.CancelRecording(resume: false); } catch { /* shutting down anyway */ }

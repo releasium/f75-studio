@@ -14,6 +14,9 @@ public static class EffectIds
 
     /// <summary>App-side live effect (screen colours on the frame keys, a contrasting accent on the main keys); never written to the keyboard.</summary>
     public const int ScreenSyncAccent = 102;
+
+    /// <summary>App-side live effect (Pomodoro timer: red focus, blue rest, F1–F12 time bar); needs no screen capture; never written to the keyboard.</summary>
+    public const int Pomodoro = 103;
 }
 
 /// <param name="Id">Value written to settings byte 0x0a (protocol doc §5).</param>
@@ -46,6 +49,7 @@ public static class F75Effects
         new(EffectIds.ScreenSync, "Screen sync (edges)", HasSpeed: false, HasBrightness: true, HasColor: false, IsLive: true),
         new(EffectIds.ScreenSyncBlur, "Screen sync (blur)", HasSpeed: false, HasBrightness: true, HasColor: false, IsLive: true),
         new(EffectIds.ScreenSyncAccent, "Screen sync (accent)", HasSpeed: false, HasBrightness: true, HasColor: false, IsLive: true),
+        new(EffectIds.Pomodoro, "Pomodoro timer", HasSpeed: false, HasBrightness: true, HasColor: false, IsLive: true),
     ];
 
     public static bool IsSupported(int id) => All.Any(e => e.Id == id);

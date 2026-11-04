@@ -40,8 +40,12 @@ public sealed class ScreenSyncEngine : IScreenSync
     public event Action<string>? Faulted;
     public event Action<string?>? CaptureStatusChanged;
 
-    public async Task StartAsync(Func<int> brightness, Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>>? mapper = null, CancellationToken ct = default)
+    private static readonly CapturedFrame Blank = new(1, 1, [0, 0, 0, 255]);
+
+    public async Task StartAsync(Func<int> brightness, Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>>? mapper = null,
+        Func<bool>? needsCapture = null, CancellationToken ct = default)
     {
+        needsCapture ??= () => true;
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -58,7 +62,7 @@ public sealed class ScreenSyncEngine : IScreenSync
             string? pausedReason = null;
             try
             {
-                capture = _captureFactory();
+                if (needsCapture()) capture = _captureFactory();
             }
             catch (ScreenCaptureException ex)
             {
@@ -73,7 +77,7 @@ public sealed class ScreenSyncEngine : IScreenSync
             var cts = new CancellationTokenSource();
             _cts = cts;
             _running = true;
-            _loop = Task.Run(() => RunAsync(capture, pausedReason, brightness, mapper ?? EdgeMapper.Map, cts.Token));
+            _loop = Task.Run(() => RunAsync(capture, pausedReason, brightness, mapper ?? EdgeMapper.Map, needsCapture, cts.Token));
         }
         finally
         {
@@ -115,7 +119,7 @@ public sealed class ScreenSyncEngine : IScreenSync
     }
 
     private async Task RunAsync(IScreenCapture? capture, string? startPausedReason, Func<int> brightness,
-        Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>> mapper, CancellationToken ct)
+        Func<CapturedFrame, IReadOnlyDictionary<int, Rgb>> mapper, Func<bool> needsCapture, CancellationToken ct)
     {
         IReadOnlyDictionary<int, Rgb>? lastTarget = null;
         CapturedFrame? lastFrame = null;
@@ -123,6 +127,7 @@ public sealed class ScreenSyncEngine : IScreenSync
         Dictionary<int, Rgb>? lastSent = null;
         var lastSendAt = long.MinValue;
         var paused = false;
+        var wasBlank = false;
 
         try
         {
@@ -138,8 +143,33 @@ public sealed class ScreenSyncEngine : IScreenSync
                 var start = _nowMs();
                 var target = lastTarget;
 
-                try
+                if (!needsCapture())
                 {
+                    // Screen-independent effect: release the screen and map a blank frame every tick.
+                    if (capture is not null)
+                    {
+                        try { capture.Dispose(); } catch { /* best effort */ }
+                        capture = null;
+                    }
+                    lastFrame = null;
+                    target = mapper(Blank);
+                    lastTarget = target;
+                    wasBlank = true;
+                    if (paused)
+                    {
+                        paused = false;
+                        Raise(CaptureStatusChanged, (string?)null);
+                    }
+                }
+                else try
+                {
+                    if (wasBlank)
+                    {
+                        // Back to a screen effect: never show (or dim, while paused) the screen-independent image again.
+                        wasBlank = false;
+                        lastTarget = null;
+                        target = null;
+                    }
                     if (capture is null)
                     {
                         try { capture = _captureFactory(); }

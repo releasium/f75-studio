@@ -38,6 +38,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private int _baseEffectId = EffectIds.FixedOn;
     private int _brightnessForLive = 9;
     private int _liveEffectId = EffectIds.ScreenSync; // read by the engine's mapper on its own thread
+    private int? _effectBeforePomodoro;
     private bool _screenRunning;
     private bool _locked;
     private bool _suspended;
@@ -65,8 +66,9 @@ public sealed partial class KeyboardViewModel : ObservableObject
 
     /// <param name="selectPerKeyBeforeLive">Not safe to enable yet: overwrites stored per-key colours and has no start-failure backoff — see Plan 3 final review I2.</param>
     public KeyboardViewModel(IKeyboardDevice device, JsonFileStore<LightingProfileSet> store, Func<CancellationToken, Task>? debounce = null,
-        IScreenSync? screenSync = null, bool selectPerKeyBeforeLive = false)
+        IScreenSync? screenSync = null, bool selectPerKeyBeforeLive = false, PomodoroTimer? pomodoro = null)
     {
+        Pomodoro = pomodoro ?? new PomodoroTimer();
         _device = device;
         _screenSync = screenSync;
         _selectPerKeyBeforeLive = selectPerKeyBeforeLive;
@@ -175,7 +177,35 @@ public sealed partial class KeyboardViewModel : ObservableObject
         BaseEffectId = _baseEffectId,
     };
 
+    /// <summary>
+    /// What a profile stores: the current state, except that Pomodoro is a session overlay and is saved as the effect it
+    /// replaced, so a profile never opens the timer by itself.
+    /// </summary>
+    private LightingState ProfileState => SelectedEffect.Id == EffectIds.Pomodoro
+        ? CurrentState with { EffectId = _effectBeforePomodoro is { } id && F75Effects.IsSupported(id) && id != EffectIds.Pomodoro ? id : _baseEffectId }
+        : CurrentState;
+
     public IReadOnlyList<string> ProfileNamesSnapshot() => ProfileNames.ToList();
+
+    /// <summary>The timer the Pomodoro effect shows on the keyboard.</summary>
+    public PomodoroTimer Pomodoro { get; }
+
+    /// <summary>Raised on the UI thread when the Pomodoro effect gets selected (Effect list, profile switch or <see cref="BeginPomodoro"/>).</summary>
+    public event Action? PomodoroSelected;
+
+    /// <summary>Switches the lighting to the Pomodoro effect; <see cref="EndPomodoro"/> puts back the effect it replaced.</summary>
+    public void BeginPomodoro()
+    {
+        if (SelectedEffect.Id != EffectIds.Pomodoro) SelectedEffect = F75Effects.Get(EffectIds.Pomodoro);
+    }
+
+    /// <summary>If the Pomodoro effect is still selected, goes back to the effect that was selected before it.</summary>
+    public void EndPomodoro()
+    {
+        if (SelectedEffect.Id != EffectIds.Pomodoro) return;
+        var previous = _effectBeforePomodoro is { } id && F75Effects.IsSupported(id) ? id : _baseEffectId;
+        SelectedEffect = F75Effects.Get(previous);
+    }
 
     public bool ApplyProfileByName(string name)
     {
@@ -331,10 +361,20 @@ public sealed partial class KeyboardViewModel : ObservableObject
         UpdateScreenSync();
     }
 
+    partial void OnSelectedEffectChanged(EffectDefinition? oldValue, EffectDefinition newValue)
+    {
+        if (newValue.Id == EffectIds.Pomodoro && oldValue is { } old && old.Id != EffectIds.Pomodoro && !_loading) _effectBeforePomodoro = old.Id;
+    }
+
     partial void OnSelectedEffectChanged(EffectDefinition value)
     {
+        if (value.Id == EffectIds.Pomodoro && !_initializing) PomodoroSelected?.Invoke();
         if (!value.IsLive) _baseEffectId = value.Id;
-        else Volatile.Write(ref _liveEffectId, value.Id); // keep the last live id so a stopping engine doesn't flash the other mapper
+        else
+        {
+            Volatile.Write(ref _liveEffectId, value.Id); // keep the last live id so a stopping engine doesn't flash the other mapper
+            if (_screenRunning) ShowRunningStatus(); // live-to-live switch: the engine keeps running, the text follows the effect
+        }
         _faulted = false; // choosing an effect (or loading a profile) allows screen sync to start again
         OnPropertyChanged(nameof(ShowSpeed));
         OnPropertyChanged(nameof(ShowBrightness));
@@ -387,7 +427,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
     private void AddProfile(string name)
     {
         _loadFailed = false;
-        _profiles.Add(new LightingProfile(name, CurrentState));
+        _profiles.Add(new LightingProfile(name, ProfileState));
         ProfileNames.Add(name);
         _activeProfileName = name;
         _loading = true;
@@ -411,6 +451,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
             var s = state.Normalize();
             var effect = F75Effects.IsSupported(s.EffectId) ? F75Effects.Get(s.EffectId) : F75Effects.Get(EffectIds.FixedOn);
             var savedBase = F75Effects.IsSupported(s.BaseEffectId) && !F75Effects.Get(s.BaseEffectId).IsLive ? s.BaseEffectId : EffectIds.FixedOn;
+            if (effect.Id == EffectIds.Pomodoro) effect = F75Effects.Get(savedBase); // Pomodoro is never loaded from a profile (only the timer window starts it)
             _baseEffectId = effect.IsLive ? savedBase : effect.Id;
             SelectedEffect = effect;
             Brightness = s.Brightness;
@@ -472,7 +513,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
         _loadFailed = false; // a real user edit: saving is allowed again
         RefreshPreview();
         var index = _profiles.FindIndex(p => p.Name == _activeProfileName);
-        if (index >= 0) _profiles[index] = _profiles[index] with { State = CurrentState };
+        if (index >= 0) _profiles[index] = _profiles[index] with { State = ProfileState };
         // When leaving screen sync, the stop path schedules the (forced) restore itself: don't write twice.
         if (!(_screenRunning && !ShouldRunScreenSync())) ScheduleApply();
         UpdateScreenSync();
@@ -642,11 +683,14 @@ public sealed partial class KeyboardViewModel : ObservableObject
         UpdateScreenSync();
     }
 
+    private string LiveName => SelectedEffect.Id == EffectIds.Pomodoro ? "Pomodoro lighting" : "Screen sync";
+
     private static bool IsLiveEffect(int id) => F75Effects.IsSupported(id) && F75Effects.Get(id).IsLive;
 
     private bool ShouldRunScreenSync() =>
         _screenSync is not null && SelectedEffect.IsLive && DeviceStatus == DeviceStatus.Connected
-        && !_locked && !_suspended && !_faulted && !_exiting;
+        && (!_locked || SelectedEffect.Id == EffectIds.Pomodoro) // the timer needs no screen: keep it lit through a locked break
+        && !_suspended && !_faulted && !_exiting;
 
     private void UpdateScreenSync() => PendingScreenSync = UpdateScreenSyncAsync();
 
@@ -677,7 +721,7 @@ public sealed partial class KeyboardViewModel : ObservableObject
             }
             else if (SelectedEffect.IsLive && !_locked && !_suspended && DeviceStatus != DeviceStatus.Connected)
             {
-                SetStatus("Screen sync needs the USB cable.", InfoBarSeverity.Informational);
+                SetStatus($"{LiveName} needs the USB cable.", InfoBarSeverity.Informational);
             }
         }
         catch (Exception ex)
@@ -710,8 +754,10 @@ public sealed partial class KeyboardViewModel : ObservableObject
                 {
                     EffectIds.ScreenSyncBlur => BlurMapper.Map(frame),
                     EffectIds.ScreenSyncAccent => AccentMapper.Map(frame),
+                    EffectIds.Pomodoro => PomodoroMapper.Map(Pomodoro.Snapshot()),
                     _ => EdgeMapper.Map(frame),
-                }));
+                },
+                needsCapture: () => Volatile.Read(ref _liveEffectId) != EffectIds.Pomodoro));
         }
         catch (Exception ex)
         {
@@ -740,13 +786,13 @@ public sealed partial class KeyboardViewModel : ObservableObject
         RefreshPreview();
         if (_exiting) return;
         if (DeviceStatus == DeviceStatus.Connected) ScheduleApply(force: true);
-        else if (SelectedEffect.IsLive && !_locked && !_suspended) SetStatus("Screen sync needs the USB cable.", InfoBarSeverity.Informational);
+        else if (SelectedEffect.IsLive && !_locked && !_suspended) SetStatus($"{LiveName} needs the USB cable.", InfoBarSeverity.Informational);
     }
 
     private void ShowRunningStatus()
     {
         if (_capturePaused is { } text) SetStatus(text, InfoBarSeverity.Warning);
-        else SetStatus("Screen sync is running.", InfoBarSeverity.Success);
+        else SetStatus(SelectedEffect.Id == EffectIds.Pomodoro ? "Pomodoro lighting is on." : "Screen sync is running.", InfoBarSeverity.Success);
     }
 
     private void OnCaptureStatusChanged(string? paused)

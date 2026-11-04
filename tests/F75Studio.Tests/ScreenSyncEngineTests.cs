@@ -112,6 +112,45 @@ public class ScreenSyncEngineTests
     }
 
     [Fact]
+    public async Task Without_capture_the_mapper_runs_on_a_blank_frame_and_the_screen_is_never_opened()
+    {
+        var h = new Harness();
+        var green = new Rgb(0, 255, 0);
+        var sizes = new List<(int, int)>();
+        IReadOnlyDictionary<int, Rgb> Map(CapturedFrame f)
+        {
+            lock (sizes) sizes.Add((f.Width, f.Height));
+            return F75Layout.Keys.ToDictionary(k => k.Led, _ => green);
+        }
+        await h.Engine.StartAsync(() => 9, Map, needsCapture: () => false);
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Count >= 1);
+        await h.Engine.StopAsync();
+
+        Assert.Equal(0, h.Captures.Created);
+        Assert.Equal(green, h.Device.LiveFramesSnapshot()[0][EscLed]);
+        lock (sizes) Assert.All(sizes, s => Assert.Equal((1, 1), s));
+    }
+
+    [Fact]
+    public async Task Switching_to_a_capture_effect_opens_the_screen_without_a_restart()
+    {
+        var h = new Harness();
+        var capture = 0;
+        IReadOnlyDictionary<int, Rgb> Map(CapturedFrame f) =>
+            F75Layout.Keys.ToDictionary(k => k.Led, _ => f.Width == 1 ? new Rgb(0, 255, 0) : Blue);
+        await h.Engine.StartAsync(() => 9, Map, needsCapture: () => Volatile.Read(ref capture) == 1);
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Count >= 1);
+
+        for (var i = 0; i < 40; i++) h.Captures.Enqueue(Solid(Red));
+        Volatile.Write(ref capture, 1);
+        await WaitUntil(() => h.Device.LiveFramesSnapshot().Any(f => f[EscLed].B > 200));
+        await h.Engine.StopAsync();
+
+        Assert.Equal(1, h.Captures.Created);
+        Assert.Equal(1, h.Device.LiveStarts);
+    }
+
+    [Fact]
     public async Task A_mapper_switch_shows_up_on_a_static_screen_without_new_captures()
     {
         var h = new Harness();

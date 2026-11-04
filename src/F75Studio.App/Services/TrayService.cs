@@ -14,11 +14,16 @@ public sealed class TrayService : IDisposable
     private readonly Action _exit;
     private readonly Func<IReadOnlyList<string>> _lightingProfiles;
     private readonly Action<string> _applyLightingProfile;
+    private readonly Action _showPomodoro;
+    private readonly Func<bool> _pomodoroOpen;
     private readonly TaskbarIcon _icon;
 
     public TrayService(AppServices services, Action show, Action exit,
-        Func<IReadOnlyList<string>> lightingProfiles, Action<string> applyLightingProfile)
+        Func<IReadOnlyList<string>> lightingProfiles, Action<string> applyLightingProfile,
+        Action showPomodoro, Func<bool> pomodoroOpen)
     {
+        _showPomodoro = showPomodoro;
+        _pomodoroOpen = pomodoroOpen;
         _lightingProfiles = lightingProfiles;
         _applyLightingProfile = applyLightingProfile;
         _services = services;
@@ -60,6 +65,10 @@ public sealed class TrayService : IDisposable
         }
         if (lighting.Items.Count == 0) lighting.Items.Add(new MenuItem { Header = "No profiles", IsEnabled = false });
         menu.Items.Add(lighting);
+
+        var pomodoro = Item("Pomodoro timer", _showPomodoro);
+        pomodoro.IsChecked = _pomodoroOpen(); // a mark only: clicking always opens or brings forward the timer
+        menu.Items.Add(pomodoro);
 
         var scripts = new MenuItem { Header = "Scripts" };
         foreach (var script in ScriptDiscovery.Discover(_services.Paths.ScriptSearchFolders))

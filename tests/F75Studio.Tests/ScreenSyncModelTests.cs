@@ -14,8 +14,8 @@ public class ScreenSyncModelTests
         Assert.True(def.HasBrightness);
         Assert.False(def.HasSpeed);
         Assert.False(def.HasColor);
-        Assert.Equal(EffectIds.ScreenSyncAccent, F75Effects.All[^1].Id);
-        int[] live = [EffectIds.ScreenSync, EffectIds.ScreenSyncBlur, EffectIds.ScreenSyncAccent];
+        Assert.Equal(EffectIds.Pomodoro, F75Effects.All[^1].Id);
+        int[] live = [EffectIds.ScreenSync, EffectIds.ScreenSyncBlur, EffectIds.ScreenSyncAccent, EffectIds.Pomodoro];
         Assert.All(F75Effects.All.Where(e => !live.Contains(e.Id)), e => Assert.False(e.IsLive));
     }
 
