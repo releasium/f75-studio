@@ -20,6 +20,7 @@ public partial class App : Application
     private TrayService? _tray;
     private MainWindow? _window;
     private PomodoroWindow? _pomodoroWindow;
+    private readonly DispatcherTimer _pomodoroTrayTick = new() { Interval = TimeSpan.FromSeconds(1) };
     private HotkeysViewModel? _hotkeys;
     private ScriptsViewModel? _scripts;
     private AulaF75Device? _keyboardDevice;
@@ -74,7 +75,15 @@ public partial class App : Application
         _services.SettingsChanged += (_, settings) => ApplyTheme(settings.Theme);
 
         _tray = new TrayService(_services, ShowMainWindow, RequestExit, () => _keyboard?.ProfileNamesSnapshot() ?? [], ApplyLightingProfile,
-            ShowPomodoro, () => _pomodoroWindow is not null, () => _keyboard?.SelectedEffect.Id, SelectEffect);
+            new PomodoroControls(
+                State: () => _pomodoroWindow is not null ? _keyboard?.Pomodoro.Snapshot() : null,
+                Show: ShowPomodoro,
+                StartPause: () => PomodoroAction(t => { if (t.Snapshot().Running) t.Pause(); else t.Start(); }),
+                Skip: () => PomodoroAction(t => t.Skip()),
+                Reset: () => PomodoroAction(t => t.Reset()),
+                Stop: () => _pomodoroWindow?.Close()),
+            () => _keyboard?.SelectedEffect.Id, SelectEffect);
+        _pomodoroTrayTick.Tick += (_, _) => UpdatePomodoroTray();
         _instance!.ArgumentsReceived += (_, args) => Ui.Run(() => HandleArguments(args));
         _services.StartAutoRunScripts();
 
@@ -177,15 +186,30 @@ public partial class App : Application
         window.Closed += (_, _) =>
         {
             _pomodoroWindow = null;
+            _pomodoroTrayTick.Stop();
             keyboard.Pomodoro.Reset();
             keyboard.EndPomodoro();
+            UpdatePomodoroTray();
         };
         _pomodoroWindow = window; // set before BeginPomodoro: selecting the effect raises PomodoroSelected again
         keyboard.Pomodoro.Reset();
         keyboard.Pomodoro.Start(); // opening the timer starts a focus period
         window.Show();
         keyboard.BeginPomodoro();
+        _pomodoroTrayTick.Start();
+        UpdatePomodoroTray();
     }
+
+    /// <summary>Tray Pause/Skip/Reset: acts on the timer and shows the result in the tray at once (the window catches up on its own tick).</summary>
+    private void PomodoroAction(Action<PomodoroTimer> action)
+    {
+        if (_pomodoroWindow is null || _keyboard is not { } keyboard) return;
+        action(keyboard.Pomodoro);
+        UpdatePomodoroTray();
+    }
+
+    private void UpdatePomodoroTray() =>
+        _tray?.UpdatePomodoro(_pomodoroWindow is not null ? _keyboard?.Pomodoro.Snapshot() : null);
 
     /// <summary>Tray Effect menu: the same as choosing the effect on the Keyboard page (saved in the active profile); Pomodoro opens the timer.</summary>
     private void SelectEffect(int id)

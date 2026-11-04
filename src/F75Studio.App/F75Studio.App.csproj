@@ -5,6 +5,7 @@
     <ProjectReference Include="..\F75Studio.Hotkeys\F75Studio.Hotkeys.csproj" />
     <ProjectReference Include="..\F75Studio.Lighting\F75Studio.Lighting.csproj" />
     <ProjectReference Include="..\F75Studio.Lighting.Aula\F75Studio.Lighting.Aula.csproj" />
+    <InternalsVisibleTo Include="F75Studio.Tests" />
   </ItemGroup>
 
   <ItemGroup>
