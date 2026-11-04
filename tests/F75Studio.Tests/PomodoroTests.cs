@@ -1,4 +1,4 @@
-using F75Studio.Lighting;
+﻿using F75Studio.Lighting;
 
 namespace F75Studio.Tests;
 
@@ -148,44 +148,53 @@ public class PomodoroMapperTests
     private static PomodoroSnapshot Snap(PomodoroPhase phase, double fractionLeft, bool running = true) =>
         new(phase, TimeSpan.FromMinutes(12 * fractionLeft), TimeSpan.FromMinutes(12), running, 0);
 
+
+    private static readonly string[] Bar = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12"];
+
     [Fact]
-    public void Focus_is_red_and_a_full_bar_at_the_start()
+    public void Focus_starts_red_with_a_dark_F_row()
     {
         var map = PomodoroMapper.Map(Snap(PomodoroPhase.Focus, 1));
 
         Assert.Equal(80, map.Count);
-        Assert.All(map.Values, c => Assert.Equal(PomodoroMapper.FocusColor, c));
-    }
-
-    [Fact]
-    public void Rest_is_blue()
-    {
-        var map = PomodoroMapper.Map(Snap(PomodoroPhase.Rest, 1));
-
-        Assert.Equal(PomodoroMapper.RestColor, Key(map, "J"));
-        Assert.Equal(PomodoroMapper.RestColor, Key(map, "F12"));
-    }
-
-    [Fact]
-    public void Bar_drains_from_F12_towards_F1()
-    {
-        // 5.5 of 12 twelfths left: F1-F5 lit, F6 half, F7-F12 off; the rest of the board stays red.
-        var map = PomodoroMapper.Map(Snap(PomodoroPhase.Focus, 5.5 / 12));
-
-        foreach (var n in new[] { "F1", "F2", "F3", "F4", "F5" }) Assert.Equal(PomodoroMapper.FocusColor, Key(map, n));
-        Assert.Equal(new Rgb(128, 0, 0), Key(map, "F6"));
-        foreach (var n in new[] { "F7", "F8", "F9", "F10", "F11", "F12" }) Assert.Equal(new Rgb(0, 0, 0), Key(map, n));
+        Assert.All(Bar, n => Assert.Equal(new Rgb(0, 0, 0), Key(map, n)));
+        Assert.Equal(PomodoroMapper.FocusColor, Key(map, "J"));
         Assert.Equal(PomodoroMapper.FocusColor, Key(map, "Esc"));
+    }
+
+    [Fact]
+    public void Focus_bar_fills_blue_from_F1()
+    {
+        // 5.5 of 12 twelfths gone: F1-F5 blue, F6 half blue, F7-F12 dark; the rest of the board stays red.
+        var map = PomodoroMapper.Map(Snap(PomodoroPhase.Focus, 6.5 / 12));
+
+        foreach (var n in Bar[..5]) Assert.Equal(PomodoroMapper.RestColor, Key(map, n));
+        var half = Key(map, "F6");
+        Assert.InRange(half.B, 120, 135);
+        Assert.Equal(0, half.R);
+        foreach (var n in Bar[6..]) Assert.Equal(new Rgb(0, 0, 0), Key(map, n));
         Assert.Equal(PomodoroMapper.FocusColor, Key(map, "Space"));
     }
 
     [Fact]
-    public void Rest_bar_works_the_same_way()
+    public void Focus_bar_is_full_at_the_end()
     {
-        var map = PomodoroMapper.Map(Snap(PomodoroPhase.Rest, 3.0 / 12));
+        var map = PomodoroMapper.Map(Snap(PomodoroPhase.Focus, 0));
 
-        Assert.Equal(PomodoroMapper.RestColor, Key(map, "F3"));
+        Assert.All(Bar, n => Assert.Equal(PomodoroMapper.RestColor, Key(map, n)));
+    }
+
+    [Fact]
+    public void Rest_is_blue_with_a_red_bar()
+    {
+        var start = PomodoroMapper.Map(Snap(PomodoroPhase.Rest, 1));
+        Assert.Equal(PomodoroMapper.RestColor, Key(start, "J"));
+        Assert.All(Bar, n => Assert.Equal(new Rgb(0, 0, 0), Key(start, n)));
+
+        var map = PomodoroMapper.Map(Snap(PomodoroPhase.Rest, 9.0 / 12)); // a quarter gone
+        Assert.Equal(PomodoroMapper.FocusColor, Key(map, "F3"));
         Assert.Equal(new Rgb(0, 0, 0), Key(map, "F4"));
+        Assert.Equal(PomodoroMapper.RestColor, Key(map, "J"));
     }
 
     [Fact]
@@ -194,7 +203,7 @@ public class PomodoroMapperTests
         var map = PomodoroMapper.Map(Snap(PomodoroPhase.Focus, 0.5, running: false));
 
         Assert.Equal(new Rgb(89, 0, 0), Key(map, "J"));
-        Assert.Equal(new Rgb(89, 0, 0), Key(map, "F1"));
+        Assert.Equal(new Rgb(0, 22, 89), Key(map, "F1"));
         Assert.Equal(new Rgb(0, 0, 0), Key(map, "F12"));
     }
 }

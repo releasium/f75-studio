@@ -19,8 +19,9 @@ public partial class KeyboardScreenSyncTests
         Assert.False(_sync.LastNeedsCapture!());
         Assert.Equal(applied, _device.Applied.Count); // nothing stored is written
         var map = _sync.LastMapper!(new CapturedFrame(1, 1, [0, 0, 0, 255]));
-        Assert.Equal(PomodoroMapper.Map(vm.Pomodoro.Snapshot()).Count, map.Count);
-        Assert.All(map.Values, c => Assert.Equal(PomodoroMapper.Map(vm.Pomodoro.Snapshot())[F75Layout.Keys[0].Led], c));
+        var expected = PomodoroMapper.Map(vm.Pomodoro.Snapshot()); // the timer is stopped, so the snapshot doesn't move
+        Assert.Equal(expected.Count, map.Count);
+        Assert.All(map, kv => Assert.Equal(expected[kv.Key], kv.Value));
     }
 
     [Fact]

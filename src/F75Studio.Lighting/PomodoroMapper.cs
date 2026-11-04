@@ -1,8 +1,9 @@
 namespace F75Studio.Lighting;
 
 /// <summary>
-/// Pomodoro lighting: the keyboard is red while focusing and blue while resting, and F1–F12 are a progress bar of
-/// the time left (all twelve lit at the start, draining from F12 towards F1). While paused everything is dimmed.
+/// Pomodoro lighting: the keyboard is red while focusing and blue while resting. F1–F12 are a progress bar in the
+/// other colour (blue during focus, red during rest): dark at the start of a phase, filling up from F1 to F12 as
+/// the time passes. While paused everything is dimmed.
 /// </summary>
 public static class PomodoroMapper
 {
@@ -18,15 +19,17 @@ public static class PomodoroMapper
 
     public static IReadOnlyDictionary<int, Rgb> Map(PomodoroSnapshot snapshot)
     {
-        var color = snapshot.Phase == PomodoroPhase.Focus ? FocusColor : RestColor;
+        var focus = snapshot.Phase == PomodoroPhase.Focus;
+        var board = focus ? FocusColor : RestColor;
+        var bar = focus ? RestColor : FocusColor;
         var level = snapshot.Running ? 1.0 : PausedLevel;
 
         var result = new Dictionary<int, Rgb>(F75Layout.Keys.Count);
-        foreach (var k in F75Layout.Keys) result[k.Led] = Scale(color, level);
+        foreach (var k in F75Layout.Keys) result[k.Led] = Scale(board, level);
 
-        // Key i is fully lit while more than i+1 twelfths are left and fades out over its own twelfth.
-        var lit = snapshot.RemainingFraction * BarLeds.Length;
-        for (var i = 0; i < BarLeds.Length; i++) result[BarLeds[i]] = Scale(color, level * Math.Clamp(lit - i, 0, 1));
+        // Key i lights up over its own twelfth of the phase: F1 first, F12 when the phase ends.
+        var filled = (1 - snapshot.RemainingFraction) * BarLeds.Length;
+        for (var i = 0; i < BarLeds.Length; i++) result[BarLeds[i]] = Scale(bar, level * Math.Clamp(filled - i, 0, 1));
         return result;
     }
 
